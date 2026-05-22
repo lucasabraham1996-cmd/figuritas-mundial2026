@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Planilla de figuritas Mundial 2026</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* Animaciones personalizadas */
+        .animate-blob { animation: blob 7s infinite; }
+        .animation-delay-2000 { animation-delay: 2s; }
+        .animation-delay-4000 { animation-delay: 4s; }
+        @keyframes blob {
+            0% { transform: translate(0px, 0px) scale(1); }
+            33% { transform: translate(30px, -50px) scale(1.1); }
+            66% { transform: translate(-20px, 20px) scale(0.9); }
+            100% { transform: translate(0px, 0px) scale(1); }
+        }
+        .fade-in { animation: fadeIn 0.3s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Ajuste de scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.3); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.5); }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-[#1e40af] via-[#047857] to-[#be123c] bg-fixed text-white min-h-screen font-sans selection:bg-white/30 pb-20">
+
+    <div id="app">
+        <!-- Renderizado dinámico aquí -->
+    </div>
+
+    <!-- Script Principal -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+
+        // --- CONFIGURACIÓN DE FIREBASE ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyCfB0JTcyiWnJNYQvy1Hwr87ez5CqTNDYc",
+            authDomain: "figuritas2026-73620.firebaseapp.com",
+            projectId: "figuritas2026-73620",
+            storageBucket: "figuritas2026-73620.firebasestorage.app",
+            messagingSenderId: "1090126783761",
+            appId: "1:1090126783761:web:27a2dcb7a2697b59a8d8b0",
+            measurementId: "G-YSYPW6DZ4G"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const projectId = 'album-mundial-2026';
+
+        // --- CONSTANTES ---
+        const TEAMS = [
+            'FWC', 'MEX', 'RSA', 'KOR', 'CZE', 'CAN', 'BIH', 'QAT', 'SUI', 'BRA', 
+            'MAR', 'HAI', 'SCO', 'USA', 'PAR', 'AUS', 'TUR', 'GER', 'CUW', 'CIV', 
+            'ECU', 'NED', 'JPN', 'SWE', 'TUN', 'BEL', 'EGY', 'IRN', 'NZL', 'ESP', 
+            'CPV', 'KSA', 'URU', 'FRA', 'SEN', 'IRQ', 'NOR', 'ARG', 'ALG', 'AUT', 
+            'JOR', 'POR', 'COD', 'UZB', 'COL', 'ENG', 'CRO', 'GHA', 'PAN', 'CC'
+        ];
+        const getStickerCount = (team) => team === 'FWC' ? 19 : (team === 'CC' ? 14 : 20);
+        const TOTAL_STICKERS = TEAMS.reduce((acc, team) => acc + getStickerCount(team), 0);
+        const LOGO_URL = 'https://i.postimg.cc/zBKxcyQx/Mundial.png';
+
+        const TEAM_DETAILS = {
+            'FWC': { name: 'Especiales FIFA', code: 'fifa', colors: ['#C5B358', '#FFFFFF', '#000000'] },
+            'MEX': { name: 'México', code: 'mx', colors: ['#006847', '#CE1126', '#FFFFFF'] },
+            'RSA': { name: 'Sudáfrica', code: 'za', colors: ['#007749', '#FFB81C', '#000000'] },
+            'KOR': { name: 'Corea del Sur', code: 'kr', colors: ['#C21A42', '#0047A0', '#FFFFFF'] },
+            'CZE': { name: 'República Checa', code: 'cz', colors: ['#ED1B24', '#11457E', '#FFFFFF'] },
+            'CAN': { name: 'Canadá', code: 'ca', colors: ['#FF0000', '#FFFFFF', '#800000'] },
+            'BIH': { name: 'Bosnia y Herz.', code: 'ba', colors: ['#002395', '#FFCD00', '#FFFFFF'] },
+            'QAT': { name: 'Qatar', code: 'qa', colors: ['#8A1538', '#FFFFFF', '#4A0B1E'] },
+            'SUI': { name: 'Suiza', code: 'ch', colors: ['#FF0000', '#FFFFFF', '#990000'] },
+            'BRA': { name: 'Brasil', code: 'br', colors: ['#FFDF00', '#009C3B', '#002776'] },
+            'MAR': { name: 'Marruecos', code: 'ma', colors: ['#C1272D', '#006233', '#FFDF00'] },
+            'HAI': { name: 'Haití', code: 'ht', colors: ['#00209F', '#D21034', '#FFFFFF'] },
+            'SCO': { name: 'Escocia', code: 'gb-sct', colors: ['#005EB8', '#FFFFFF', '#003B73'] },
+            'USA': { name: 'Estados Unidos', code: 'us', colors: ['#002868', '#BF0A30', '#FFFFFF'] },
+            'PAR': { name: 'Paraguay', code: 'py', colors: ['#D52B1E', '#FFFFFF', '#0038A8'] },
+            'AUS': { name: 'Australia', code: 'au', colors: ['#FFCD00', '#008751', '#00008B'] },
+            'TUR': { name: 'Turquía', code: 'tr', colors: ['#E30A17', '#FFFFFF', '#990010'] },
+            'GER': { name: 'Alemania', code: 'de', colors: ['#000000', '#FF0000', '#FFCE00'] },
+            'CUW': { name: 'Curazao', code: 'cw', colors: ['#002B7F', '#F9E814', '#FFFFFF'] },
+            'CIV': { name: 'Costa de Marfil', code: 'ci', colors: ['#F77F00', '#FFFFFF', '#009E60'] },
+            'ECU': { name: 'Ecuador', code: 'ec', colors: ['#FFDD00', '#034EA2', '#ED1C24'] },
+            'NED': { name: 'Países Bajos', code: 'nl', colors: ['#F36C21', '#FFFFFF', '#1E419B'] },
+            'JPN': { name: 'Japón', code: 'jp', colors: ['#000555', '#BC002D', '#FFFFFF'] },
+            'SWE': { name: 'Suecia', code: 'se', colors: ['#FECC00', '#006AA7', '#B28F00'] },
+            'TUN': { name: 'Túnez', code: 'tn', colors: ['#E70013', '#FFFFFF', '#990000'] },
+            'BEL': { name: 'Bélgica', code: 'be', colors: ['#E30613', '#000000', '#FFCE00'] },
+            'EGY': { name: 'Egipto', code: 'eg', colors: ['#CE1126', '#FFFFFF', '#000000'] },
+            'IRN': { name: 'Irán', code: 'ir', colors: ['#239F40', '#FFFFFF', '#DA0000'] },
+            'NZL': { name: 'Nueva Zelanda', code: 'nz', colors: ['#000000', '#FFFFFF', '#333333'] },
+            'ESP': { name: 'España', code: 'es', colors: ['#AA151B', '#F1BF00', '#00008B'] },
+            'CPV': { name: 'Cabo Verde', code: 'cv', colors: ['#003893', '#FFFFFF', '#CF2027'] },
+            'KSA': { name: 'Arabia Saudita', code: 'sa', colors: ['#006C35', '#FFFFFF', '#00401C'] },
+            'URU': { name: 'Uruguay', code: 'uy', colors: ['#75AADB', '#FFFFFF', '#FCD116'] },
+            'FRA': { name: 'Francia', code: 'fr', colors: ['#002395', '#FFFFFF', '#ED2939'] },
+            'SEN': { name: 'Senegal', code: 'sn', colors: ['#00853F', '#FDEF42', '#E31B23'] },
+            'IRQ': { name: 'Irak', code: 'iq', colors: ['#007A3D', '#FFFFFF', '#000000'] },
+            'NOR': { name: 'Noruega', code: 'no', colors: ['#BA0C2F', '#FFFFFF', '#00205B'] },
+            'ARG': { name: 'Argentina', code: 'ar', colors: ['#43A1D5', '#FFFFFF', '#D4AF37'] },
+            'ALG': { name: 'Argelia', code: 'dz', colors: ['#006233', '#FFFFFF', '#D21034'] },
+            'AUT': { name: 'Austria', code: 'at', colors: ['#ED2939', '#FFFFFF', '#990000'] },
+            'JOR': { name: 'Jordania', code: 'jo', colors: ['#CE1126', '#FFFFFF', '#007A3D'] },
+            'POR': { name: 'Portugal', code: 'pt', colors: ['#FF0000', '#006600', '#FFCE00'] },
+            'COD': { name: 'R.D. Congo', code: 'cd', colors: ['#007FFF', '#FCD116', '#CE1021'] },
+            'UZB': { name: 'Uzbekistán', code: 'uz', colors: ['#0099B5', '#FFFFFF', '#1EB53A'] },
+            'COL': { name: 'Colombia', code: 'co', colors: ['#FCD116', '#003893', '#CE1126'] },
+            'ENG': { name: 'Inglaterra', code: 'gb-eng', colors: ['#FFFFFF', '#CE1124', '#002868'] },
+            'CRO': { name: 'Croacia', code: 'hr', colors: ['#FF0000', '#FFFFFF', '#171796'] },
+            'GHA': { name: 'Ghana', code: 'gh', colors: ['#CE1126', '#FCD116', '#006B3F'] },
+            'PAN': { name: 'Panamá', code: 'pa', colors: ['#DA291C', '#FFFFFF', '#0033A0'] },
+            'CC': { name: 'Coca-Cola', code: 'cc', colors: ['#E3000F', '#FFFFFF', '#000000'] }
+        };
+
+        // --- ESTADO GLOBAL ---
+        const state = {
+            firebaseUser: null,
+            isFirebaseReady: false,
+            virtualUser: null, // {id, fullName}
+            albumData: {},
+            allUsersData: [],
+            currentTab: 'album',
+            loading: true,
+            saving: false,
+            dbError: '',
+            searchTerm: '',
+            isNewUserMode: false,
+            showClearConfirm: false,
+            selectedMarketUser: null
+        };
+
+        // --- INICIALIZACIÓN ---
+        async function init() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    try {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } catch (e) {
+                        await signInAnonymously(auth);
+                    }
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Auth error:", error);
+            }
+
+            onAuthStateChanged(auth, (user) => {
+                state.firebaseUser = user;
+                state.isFirebaseReady = true;
+                if (!user) {
+                    state.loading = false;
+                    render();
+                } else {
+                    listenToDatabase();
+                }
+            });
+        }
+
+        function listenToDatabase() {
+            const usersRef = collection(db, 'artifacts', projectId, 'public', 'data', 'sticker_users');
+            onSnapshot(usersRef, (snapshot) => {
+                const users = [];
+                snapshot.forEach(doc => users.push({ id: doc.id, ...doc.data() }));
+                state.allUsersData = users;
+                state.loading = false;
+                state.dbError = '';
+                
+                if (state.virtualUser) {
+                    const myData = users.find(u => u.id === state.virtualUser.id);
+                    if (myData && myData.album) {
+                        state.albumData = myData.album;
+                    }
+                }
+                
+                if(state.allUsersData.length === 0) state.isNewUserMode = true;
+                
+                render();
+            }, (error) => {
+                state.dbError = "Permiso denegado al leer base de datos. Verifica reglas de Firestore.";
+                state.loading = false;
+                render();
+            });
+        }
+
+        // --- LÓGICA DE NEGOCIO ---
+        window.handleLoginSubmit = async (event) => {
+            event.preventDefault();
+            if (!state.firebaseUser) {
+                alert("⚠️ No hay conexión con Firebase. Activa modo Anónimo.");
+                return;
+            }
+            
+            const name = document.getElementById('loginName')?.value || '';
+            const pin = document.getElementById('loginPin').value;
+            let userId = '';
+            let fullName = '';
+
+            if (state.isNewUserMode) {
+                fullName = name;
+                userId = fullName.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+            } else {
+                const selectElement = document.getElementById('loginSelect');
+                userId = selectElement.value;
+                const found = state.allUsersData.find(u => u.id === userId);
+                if(found) fullName = found.fullName;
+            }
+
+            if (!userId || pin.length !== 4) {
+                alert("Verifica los datos ingresados.");
+                return;
+            }
+
+            state.loading = true;
+            render();
+
+            try {
+                const userRef = doc(db, 'artifacts', projectId, 'public', 'data', 'sticker_users', userId);
+                const userSnap = await getDoc(userRef);
+
+                if (userSnap.exists()) {
+                    const data = userSnap.data();
+                    if (data.pin === pin) {
+                        state.virtualUser = { id: userId, fullName: data.fullName };
+                        state.albumData = data.album || {};
+                    } else {
+                        alert("PIN incorrecto.");
+                    }
+                } else {
+                    if (!state.isNewUserMode) {
+                        alert("El usuario ya no existe.");
+                    } else {
+                        const newUser = { fullName, pin, album: {}, createdAt: new Date().toISOString() };
+                        await setDoc(userRef, newUser);
+                        state.virtualUser = { id: userId, fullName };
+                        state.albumData = {};
+                    }
+                }
+            } catch (error) {
+                state.dbError = "Error guardando datos: " + error.message;
+            }
+            state.loading = false;
+            render();
+        };
+
+        window.handleLogout = () => {
+            state.virtualUser = null;
+            state.albumData = {};
+            state.currentTab = 'album';
+            render();
+        };
+
+        window.toggleSticker = async (team, number) => {
+            if (!state.virtualUser || !state.firebaseUser || state.saving) return;
+            state.saving = true;
+            renderTeamsOnly(); // Refresh disabled state
+
+            const currentTeamData = state.albumData[team] || {};
+            const currentState = currentTeamData[number] || 0;
+            let nextState = (currentState + 1) % 5;
+
+            const newAlbumData = JSON.parse(JSON.stringify(state.albumData));
+            if (!newAlbumData[team]) newAlbumData[team] = {};
+            
+            if (nextState === 0) delete newAlbumData[team][number]; 
+            else newAlbumData[team][number] = nextState;
+
+            state.albumData = newAlbumData;
+            renderTeamsOnly(); // Optimistic update
+
+            try {
+                const userRef = doc(db, 'artifacts', projectId, 'public', 'data', 'sticker_users', state.virtualUser.id);
+                await setDoc(userRef, { album: newAlbumData }, { merge: true });
+            } catch (error) {
+                console.error("Error guardando figurita", error);
+            } finally {
+                state.saving = false;
+                renderTeamsOnly();
+            }
+        };
+
+        window.handleClearAlbum = async () => {
+            if (!state.virtualUser || !state.firebaseUser) return;
+            state.saving = true;
+            try {
+                const userRef = doc(db, 'artifacts', projectId, 'public', 'data', 'sticker_users', state.virtualUser.id);
+                await setDoc(userRef, { album: {} }, { merge: true });
+                state.albumData = {};
+                state.showClearConfirm = false;
+                render();
+            } catch (error) {
+                console.error(error);
+            } finally {
+                state.saving = false;
+            }
+        };
+
+        // --- NAVEGACIÓN Y ESTADO DE UI ---
+        window.setTab = (tab) => { state.currentTab = tab; render(); };
+        window.setNewUserMode = (isNew) => { state.isNewUserMode = isNew; render(); };
+        window.updateSearch = (val) => { state.searchTerm = val; renderTeamsOnly(); };
+        window.setShowClearConfirm = (val) => { state.showClearConfirm = val; renderModalOnly(); };
+        window.setSelectedMarketUser = (id) => { state.selectedMarketUser = id; render(); };
+
+        // --- RENDERIZADO (VISTAS HTML) ---
+        function calculateStats() {
+            let collected = 0, duplicates = 0;
+            Object.values(state.albumData).forEach(teamData => {
+                Object.values(teamData).forEach(st => {
+                    if (st >= 1) collected++;
+                    if (st > 1) duplicates += (st - 1);
+                });
+            });
+            return { collected, duplicates, percent: Math.round((collected / TOTAL_STICKERS) * 100) };
+        }
+
+        function getMarketData() {
+            const otherUsers = state.allUsersData.filter(u => u.id !== state.virtualUser.id);
+            return otherUsers.map(user => {
+                let usefulCount = 0;
+                const userDuplicates = []; 
+                if (user.album) {
+                    Object.entries(user.album).forEach(([team, stickers]) => {
+                        Object.entries(stickers).forEach(([numStr, st]) => {
+                            if (st > 1) {
+                                const num = parseInt(numStr);
+                                userDuplicates.push({ team, num, reps: st - 1 });
+                                const myState = (state.albumData[team] && state.albumData[team][num]) || 0;
+                                if (myState === 0) usefulCount++;
+                            }
+                        });
+                    });
+                }
+                return { ...user, duplicates: userDuplicates, usefulCount };
+            }).sort((a, b) => b.usefulCount - a.usefulCount);
+        }
+
+        function renderLogin() {
+            let userOptions = state.allUsersData.map(u => `<option value="${u.id}" class="bg-gray-800 text-white">${u.fullName}</option>`).join('');
+            
+            return `
+            <div class="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
+                <div class="absolute top-20 left-20 w-72 h-72 bg-blue-500 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob"></div>
+                <div class="absolute top-20 right-20 w-72 h-72 bg-green-500 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob animation-delay-2000"></div>
+                <div class="absolute -bottom-8 left-1/2 w-72 h-72 bg-red-500 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob animation-delay-4000"></div>
+
+                <div class="bg-white/10 backdrop-blur-2xl p-8 rounded-3xl shadow-2xl w-full max-w-md z-10 border border-white/20 relative fade-in">
+                    <div class="text-center mb-8 flex flex-col items-center">
+                        <div class="bg-white/20 p-4 rounded-2xl backdrop-blur-md border border-white/30 mb-4 shadow-xl">
+                            <img src="${LOGO_URL}" alt="Mundial 2026" class="w-32 object-contain" />
+                        </div>
+                        <h2 class="text-2xl font-bold tracking-wide">Álbum Virtual</h2>
+                        <p class="text-white/70 text-sm mt-1">Lleva el control de tus figuritas</p>
+                    </div>
+
+                    ${!state.firebaseUser && !state.loading ? `
+                        <div class="bg-red-500/20 border border-red-500/50 text-red-200 px-4 py-3 rounded-xl mb-6 text-sm text-center font-medium backdrop-blur-md">
+                            ⚠️ Sin conexión a Firebase.<br/>Activa el método "Anónimo".
+                        </div>
+                    ` : ''}
+                    
+                    ${state.dbError ? `
+                        <div class="bg-red-500/20 border border-red-500/50 text-red-200 px-4 py-3 rounded-xl mb-6 text-sm text-center font-medium backdrop-blur-md">
+                            ❌ <b>Error:</b><br/>${state.dbError}
+                        </div>
+                    ` : ''}
+
+                    ${state.allUsersData.length > 0 ? `
+                        <div class="flex bg-black/20 rounded-xl p-1 mb-6 backdrop-blur-sm border border-white/10">
+                            <button onclick="window.setNewUserMode(false)" class="flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${!state.isNewUserMode ? 'bg-white/20 shadow-md text-white' : 'text-white/50 hover:text-white'}">Entrar</button>
+                            <button onclick="window.setNewUserMode(true)" class="flex-1 py-2 text-sm font-semibold rounded-lg transition-all flex items-center justify-center gap-1 ${state.isNewUserMode ? 'bg-white/20 shadow-md text-white' : 'text-white/50 hover:text-white'}"><i data-lucide="user-plus" class="w-4 h-4"></i> Nuevo</button>
+                        </div>
+                    ` : ''}
+
+                    <form onsubmit="window.handleLoginSubmit(event)" class="space-y-5">
+                        ${state.isNewUserMode ? `
+                            <div>
+                                <label class="block text-xs font-medium text-white/70 mb-1 ml-1 uppercase tracking-wider">Nombre Completo</label>
+                                <input type="text" id="loginName" required placeholder="Ej: Juan Perez" class="w-full px-4 py-3 bg-black/20 border border-white/20 rounded-xl focus:ring-2 focus:ring-white/50 outline-none transition text-white placeholder-white/30 backdrop-blur-sm" />
+                            </div>
+                        ` : `
+                            <div>
+                                <label class="block text-xs font-medium text-white/70 mb-1 ml-1 uppercase tracking-wider">Selecciona tu Usuario</label>
+                                <div class="relative">
+                                    <select id="loginSelect" class="w-full px-4 py-3 bg-black/20 border border-white/20 rounded-xl focus:ring-2 focus:ring-white/50 outline-none transition appearance-none text-white backdrop-blur-sm">
+                                        ${userOptions}
+                                    </select>
+                                    <i data-lucide="chevron-down" class="absolute right-4 top-1/2 transform -translate-y-1/2 text-white/50 pointer-events-none w-4 h-4"></i>
+                                </div>
+                            </div>
+                        `}
+                        <div>
+                            <label class="block text-xs font-medium text-white/70 mb-1 ml-1 uppercase tracking-wider">PIN (4 Dígitos)</label>
+                            <input type="password" id="loginPin" required maxlength="4" pattern="\\d{4}" placeholder="••••" oninput="this.value=this.value.replace(/\\D/g, '')" class="w-full px-4 py-3 bg-black/20 border border-white/20 rounded-xl focus:ring-2 focus:ring-white/50 outline-none text-center tracking-[1em] text-xl font-bold transition text-white placeholder-white/30 backdrop-blur-sm" />
+                        </div>
+                        <button type="submit" ${state.loading ? 'disabled' : ''} class="w-full bg-white/20 hover:bg-white/30 text-white border border-white/40 font-bold py-3 rounded-xl transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed flex justify-center items-center shadow-lg hover:shadow-xl backdrop-blur-md mt-2">
+                            ${state.loading ? '<div class="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>' : (state.isNewUserMode ? "Crear y Entrar" : "Ingresar")}
+                        </button>
+                    </form>
+                </div>
+            </div>`;
+        }
+
+        function renderTeamsHtml() {
+            const filteredTeams = TEAMS.filter(team => {
+                const details = TEAM_DETAILS[team];
+                const matchName = details ? details.name.toLowerCase() : team.toLowerCase();
+                return matchName.includes(state.searchTerm.toLowerCase()) || team.toLowerCase().includes(state.searchTerm.toLowerCase());
+            });
+
+            if(filteredTeams.length === 0) return `<div class="text-center py-16 text-white/60 bg-black/10 rounded-3xl border border-dashed border-white/20">No se encontraron selecciones.</div>`;
+
+            return filteredTeams.map(team => {
+                const details = TEAM_DETAILS[team] || { name: team, code: 'un', colors: ['#4B5563', '#1F2937', '#000000'] };
+                const count = getStickerCount(team);
+                const haveCount = Object.values(state.albumData[team] || {}).filter(s => s > 0).length;
+                
+                let flagHtml = '';
+                if(details.code === 'fifa') flagHtml = `<div class="w-8 h-6 sm:w-10 sm:h-7 bg-yellow-500/20 rounded flex items-center justify-center text-yellow-400 border border-yellow-500/50">🏆</div>`;
+                else if(details.code === 'cc') flagHtml = `<div class="w-8 h-6 sm:w-10 sm:h-7 bg-red-500/20 rounded flex items-center justify-center text-red-400 border border-red-500/50">🥤</div>`;
+                else flagHtml = `<img src="https://flagcdn.com/w40/${details.code}.png" alt="${details.name}" class="w-8 sm:w-10 rounded shadow-sm object-cover" />`;
+
+                let stickersHtml = Array.from({ length: count }).map((_, idx) => {
+                    const num = idx + 1;
+                    const st = (state.albumData[team] && state.albumData[team][num]) || 0;
+                    const isMissing = st === 0;
+                    const isHave = st >= 1;
+                    const reps = st > 1 ? st - 1 : 0;
+                    const bgColor = isHave ? details.colors[0] : '';
+                    
+                    // LÓGICA DE MÁSCARA Y 2 COLORES: Centro (Copa) = Tercer color. Bordes (Números) = Segundo color.
+                    const maskColorsHtml = isHave ? `
+                        <div class="absolute inset-0 transition-all duration-300 opacity-90"
+                             style="background: radial-gradient(ellipse at 50% 50%, ${details.colors[2]} 0%, ${details.colors[2]} 30%, ${details.colors[1]} 31%, ${details.colors[1]} 100%);
+                                    mask-image: url('${LOGO_URL}'); -webkit-mask-image: url('${LOGO_URL}');
+                                    mask-size: 85%; -webkit-mask-size: 85%;
+                                    mask-position: center; -webkit-mask-position: center;
+                                    mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat;">
+                        </div>
+                    ` : `
+                        <div class="absolute inset-0 mix-blend-overlay opacity-30"
+                             style="background-image: url('${LOGO_URL}'); background-size: 85%; background-position: center; background-repeat: no-repeat; filter: grayscale(100%) brightness(200%);">
+                        </div>
+                    `;
+
+                    let iconBadge = '';
+                    if(isHave && details.code !== 'fifa' && details.code !== 'cc') {
+                        iconBadge = `<div class="absolute bottom-1 right-1 w-6 h-6 sm:w-7 sm:h-7 rounded-full overflow-hidden border-2 border-white shadow-md z-10 bg-white flex items-center justify-center"><img src="https://flagcdn.com/w40/${details.code}.png" class="w-full h-full object-cover" /></div>`;
+                    } else if (isHave && details.code === 'fifa') {
+                        iconBadge = `<div class="absolute bottom-1 right-1 w-6 h-6 sm:w-7 sm:h-7 rounded-full overflow-hidden border-2 border-white shadow-md z-10 bg-yellow-400 flex items-center justify-center text-xs">🏆</div>`;
+                    } else if (isHave && details.code === 'cc') {
+                        iconBadge = `<div class="absolute bottom-1 right-1 w-6 h-6 sm:w-7 sm:h-7 rounded-full overflow-hidden border-2 border-white shadow-md z-10 bg-red-600 flex items-center justify-center text-xs">🥤</div>`;
+                    }
+
+                    return `
+                    <div class="relative flex justify-center">
+                        <button onclick="window.toggleSticker('${team}', ${num})" ${state.saving ? 'disabled' : ''}
+                                class="relative w-full aspect-[3/4] max-w-[80px] rounded-xl flex items-center justify-center transition-all duration-300 select-none outline-none ${isMissing ? 'bg-white/10 border border-white/20 hover:bg-white/20 shadow-inner' : 'transform hover:-translate-y-1 hover:scale-105 border-[2px] sm:border-[3px] border-white/90 shadow-[0_8px_15px_rgba(0,0,0,0.3)]'}"
+                                style="background-color: ${bgColor}">
+                            <div class="absolute inset-0 rounded-xl overflow-hidden pointer-events-none">
+                                ${maskColorsHtml}
+                            </div>
+                            <div class="absolute bottom-1 left-1 w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center font-black text-xs sm:text-sm shadow-md transition-all z-10 ${isMissing ? 'bg-black/20 text-white/50 backdrop-blur-sm' : 'bg-white text-gray-900'}">${num}</div>
+                            ${iconBadge}
+                        </button>
+                        ${reps > 0 ? `<div class="absolute -top-3 -right-2 sm:-right-3 bg-blue-500 text-white text-[10px] sm:text-xs font-black w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center border-2 border-white shadow-lg z-20 pointer-events-none">+${reps}</div>` : ''}
+                    </div>`;
+                }).join('');
+
+                return `
+                <div class="bg-black/20 backdrop-blur-xl rounded-3xl overflow-hidden border border-white/20 shadow-xl fade-in">
+                    <div class="bg-gradient-to-r from-black/60 to-black/20 px-4 py-3 sm:px-5 sm:py-3 border-b border-white/10 flex justify-between items-center backdrop-blur-md">
+                        <span class="font-bold text-base sm:text-lg tracking-wide flex items-center gap-3">
+                            ${flagHtml} ${details.name}
+                        </span>
+                        <span class="text-xs bg-white/20 backdrop-blur-md border border-white/30 px-3 py-1.5 rounded-full font-bold shadow-sm whitespace-nowrap ml-2">
+                            ${haveCount} / ${count}
+                        </span>
+                    </div>
+                    <div class="p-3 sm:p-5 grid grid-cols-4 sm:grid-cols-5 md:grid-cols-10 gap-x-2 gap-y-4 sm:gap-4 pt-6">
+                        ${stickersHtml}
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function renderAlbum() {
+            const stats = calculateStats();
+            
+            return `
+            <div class="space-y-6">
+                <div id="stats-container" class="bg-black/20 backdrop-blur-xl rounded-2xl p-5 border border-white/20 shadow-lg flex flex-col fade-in">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="font-bold text-white/90 text-lg uppercase tracking-wide">Tu Progreso</h3>
+                        <span class="text-green-400 font-extrabold text-2xl drop-shadow-md">${stats.percent}%</span>
+                    </div>
+                    <div class="w-full bg-black/40 rounded-full h-3 mb-5 border border-white/10 overflow-hidden shadow-inner">
+                        <div class="bg-gradient-to-r from-green-400 to-green-300 h-full rounded-full transition-all duration-1000 shadow-[0_0_10px_rgba(74,222,128,0.5)]" style="width: ${stats.percent}%"></div>
+                    </div>
+                    
+                    <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
+                        <div class="flex flex-col items-center bg-white/5 px-2 py-2 rounded-xl border border-white/10 flex-1 min-w-[30%] sm:min-w-[80px]">
+                            <span class="text-white/60 text-[10px] sm:text-xs uppercase mb-1 text-center">Obtenidas</span>
+                            <span class="font-bold text-base sm:text-lg leading-none">${stats.collected} <span class="text-white/40 text-xs sm:text-sm">/ ${TOTAL_STICKERS}</span></span>
+                        </div>
+                        <div class="flex flex-col items-center bg-white/5 px-2 py-2 rounded-xl border border-white/10 flex-1 min-w-[30%] sm:min-w-[80px]">
+                            <span class="text-white/60 text-[10px] sm:text-xs uppercase mb-1 text-center">Faltantes</span>
+                            <span class="font-bold text-base sm:text-lg leading-none">${TOTAL_STICKERS - stats.collected}</span>
+                        </div>
+                        <div class="flex flex-col items-center bg-blue-500/10 px-2 py-2 rounded-xl border border-blue-400/30 flex-1 min-w-[30%] sm:min-w-[80px]">
+                            <span class="text-blue-300 text-[10px] sm:text-xs uppercase mb-1 text-center">Repetidas</span>
+                            <span class="font-bold text-base sm:text-lg text-blue-300 leading-none">${stats.duplicates}</span>
+                        </div>
+                        
+                        <div class="w-full sm:w-auto mt-2 sm:mt-0 flex justify-end">
+                            <button onclick="window.setShowClearConfirm(true)" class="w-full sm:w-auto flex items-center justify-center gap-2 bg-red-500/10 hover:bg-red-500/30 text-red-300 border border-red-500/40 px-4 py-2.5 rounded-xl transition-all text-xs uppercase font-bold backdrop-blur-md">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i> Borrar Todo
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex flex-col sm:flex-row gap-4 items-center justify-between fade-in">
+                    <div class="relative w-full sm:w-72">
+                        <i data-lucide="search" class="absolute left-4 top-1/2 transform -translate-y-1/2 text-white/50 w-4 h-4"></i>
+                        <input type="text" placeholder="Buscar selección..." value="${state.searchTerm}" onkeyup="window.updateSearch(this.value)" class="w-full pl-11 pr-4 py-3 bg-black/20 border border-white/20 rounded-2xl focus:outline-none focus:ring-2 focus:ring-white/50 text-white placeholder-white/40 backdrop-blur-md shadow-inner transition-all" />
+                    </div>
+                    <div class="flex gap-4 text-xs font-medium bg-black/20 px-4 py-3 rounded-2xl border border-white/10 backdrop-blur-sm">
+                        <div class="flex items-center gap-1.5"><div class="w-5 h-5 bg-white/10 border border-white/20 rounded flex items-center justify-center opacity-70"></div> Falta</div>
+                        <div class="flex items-center gap-1.5"><div class="w-5 h-5 bg-gradient-to-br from-green-400 to-green-600 text-white flex items-center justify-center rounded shadow-md"><i data-lucide="check" class="w-3 h-3"></i></div> Tengo</div>
+                        <div class="flex items-center gap-1.5"><div class="w-5 h-5 bg-blue-500 border border-white text-white flex items-center justify-center rounded-full shadow-md"><span class="text-[9px] font-bold">+1</span></div> Repetidas</div>
+                    </div>
+                </div>
+
+                <div id="teams-container" class="space-y-8">
+                    ${renderTeamsHtml()}
+                </div>
+            </div>`;
+        }
+
+        function renderMarket() {
+            const marketData = getMarketData();
+            
+            if (state.selectedMarketUser) {
+                const userMatches = marketData.find(u => u.id === state.selectedMarketUser);
+                let dupHtml = userMatches.duplicates.map(dup => {
+                    const myState = (state.albumData[dup.team] && state.albumData[dup.team][dup.num]) || 0;
+                    const iNeedIt = myState === 0;
+                    const details = TEAM_DETAILS[dup.team] || { name: dup.team, code: 'un', colors: ['#4B5563'] };
+                    let miniIcon = details.code === 'fifa' ? '🏆' : details.code === 'cc' ? '🥤' : `<img src="https://flagcdn.com/w20/${details.code}.png" class="w-5 rounded-[2px] shadow-sm" />`;
+
+                    return `
+                    <div class="flex justify-between items-center p-4 rounded-2xl border backdrop-blur-md transition-all ${iNeedIt ? 'bg-green-400/20 border-green-400 shadow-[0_0_15px_rgba(74,222,128,0.2)]' : 'bg-white/5 border-white/10 opacity-70'}">
+                        <div class="flex items-center gap-3">
+                            <span class="font-bold px-3 py-1.5 rounded-lg shadow-md text-sm border border-white/30 flex items-center gap-2 text-white text-shadow-sm" style="background-color: ${details.colors[0]}">
+                                ${miniIcon}
+                                <span class="drop-shadow-md bg-black/30 px-2 py-0.5 rounded-md">${details.name} ${dup.num}</span>
+                            </span>
+                            ${dup.reps > 1 ? `<span class="text-xs font-bold text-white/50 bg-black/30 px-2 py-1 rounded-md">x${dup.reps}</span>` : ''}
+                        </div>
+                        ${iNeedIt ? `<span class="text-[10px] font-black text-green-300 uppercase tracking-widest bg-green-900/50 px-2.5 py-1 rounded-full border border-green-400/50">Sirve</span>` : ''}
+                    </div>`;
+                }).join('');
+
+                if(userMatches.duplicates.length === 0) dupHtml = `<div class="col-span-full text-center text-white/50 py-10 bg-black/10 rounded-2xl border border-dashed border-white/10">Este usuario no ha subido repetidas.</div>`;
+
+                return `
+                <div class="space-y-4 fade-in">
+                    <button onclick="window.setSelectedMarketUser(null)" class="text-white/70 font-medium flex items-center gap-2 hover:text-white transition bg-black/20 px-4 py-2 rounded-xl backdrop-blur-md border border-white/10 w-max">
+                        &larr; Volver al mercado
+                    </button>
+                    <div class="bg-black/20 backdrop-blur-xl rounded-3xl shadow-xl p-6 md:p-8 border-t-[6px] border-t-green-400 border-x border-b border-white/20">
+                        <h2 class="text-3xl font-black mb-1 drop-shadow-md">${userMatches.fullName}</h2>
+                        <p class="text-white/60 mb-6 font-medium">Tiene ${userMatches.duplicates.length} figuritas repetidas publicadas.</p>
+                        ${userMatches.usefulCount > 0 ? `
+                        <div class="bg-green-500/20 text-green-100 p-4 rounded-2xl mb-8 flex items-start gap-3 border border-green-400/50 backdrop-blur-md shadow-lg">
+                            <i data-lucide="alert-circle" class="shrink-0 mt-0.5 text-green-300 w-5 h-5"></i>
+                            <p class="text-sm font-medium leading-relaxed">¡Buenas noticias! Este coleccionista tiene <strong>${userMatches.usefulCount}</strong> figuritas que a ti te faltan.</p>
+                        </div>` : ''}
+                        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                            ${dupHtml}
+                        </div>
+                    </div>
+                </div>`;
+            }
+
+            let usersHtml = marketData.map(user => `
+            <div onclick="window.setSelectedMarketUser('${user.id}')" class="bg-black/20 p-5 rounded-2xl shadow-lg border border-white/10 flex items-center justify-between cursor-pointer hover:border-green-400/50 hover:bg-white/10 transition-all group backdrop-blur-md">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-white/20 to-white/5 flex items-center justify-center text-white font-black text-xl uppercase border border-white/20 group-hover:scale-110 transition-transform shadow-inner">
+                        ${user.fullName.charAt(0)}
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-white text-lg tracking-wide">${user.fullName}</h3>
+                        <p class="text-xs text-white/50 font-medium mt-0.5">${user.duplicates.length} figuritas disponibles</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    ${user.usefulCount > 0 
+                        ? `<span class="bg-green-400 text-green-950 text-xs font-black px-4 py-2 rounded-xl shadow-[0_0_10px_rgba(74,222,128,0.3)]">${user.usefulCount} te sirven</span>` 
+                        : `<span class="text-xs font-medium text-white/40 bg-white/5 px-3 py-1.5 rounded-lg border border-white/10">Revisar</span>`}
+                    <span class="text-white/20 group-hover:text-green-400 group-hover:translate-x-1 transition-all">&rarr;</span>
+                </div>
+            </div>`).join('');
+
+            if(marketData.length === 0) usersHtml = `<div class="text-center py-16 text-white/50 bg-black/10 rounded-3xl border border-dashed border-white/20 backdrop-blur-sm">Nadie más ha ingresado repetidas al mercado aún.</div>`;
+
+            return `
+            <div class="space-y-6 fade-in">
+                <div class="bg-gradient-to-r from-blue-600/60 to-purple-600/60 text-white p-8 rounded-3xl shadow-xl relative overflow-hidden backdrop-blur-md border border-white/20">
+                    <div class="absolute -right-16 -top-16 w-48 h-48 rounded-full border-[20px] border-white/10"></div>
+                    <div class="absolute right-20 -bottom-10 w-24 h-24 rounded-full border-[10px] border-white/5"></div>
+                    <h2 class="text-3xl font-black mb-3 drop-shadow-md">Mercado de Cambios</h2>
+                    <p class="opacity-90 max-w-lg text-sm leading-relaxed font-medium">Encuentra a otros usuarios con los que cambiar. La lista te prioriza a aquellos que tienen la mayor cantidad de figuritas que te faltan.</p>
+                </div>
+                <div class="grid gap-4">${usersHtml}</div>
+            </div>`;
+        }
+
+        function renderApp() {
+            return `
+            <!-- HEADER -->
+            <div class="sticky top-0 z-50 px-4 py-3 bg-black/20 backdrop-blur-xl border-b border-white/20 shadow-lg flex justify-between items-center">
+                <div class="flex items-center gap-2">
+                    <img src="${LOGO_URL}" alt="Logo" class="h-10 w-auto object-contain filter drop-shadow-md" />
+                    <span class="font-bold tracking-widest text-sm uppercase hidden sm:inline-block opacity-80">Planilla de figuritas Mundial 2026</span>
+                </div>
+                <div class="flex items-center gap-4">
+                    <span class="text-sm font-medium bg-white/10 px-3 py-1.5 rounded-full border border-white/20 flex items-center gap-2 backdrop-blur-md">
+                        <i data-lucide="user" class="w-4 h-4"></i> ${state.virtualUser.fullName}
+                    </span>
+                    <button onclick="window.handleLogout()" class="text-red-300 hover:text-white p-2 rounded-full hover:bg-red-500/30 transition border border-transparent hover:border-red-400/50 backdrop-blur-md">
+                        <i data-lucide="log-out" class="w-5 h-5"></i>
+                    </button>
+                </div>
+            </div>
+            
+            <!-- TABS -->
+            <div class="flex px-4 pt-4 gap-2 max-w-4xl mx-auto">
+                <button onclick="window.setTab('album')" class="flex-1 py-3 text-sm font-bold flex justify-center items-center gap-2 rounded-t-2xl transition-all duration-300 backdrop-blur-md border border-b-0 ${state.currentTab === 'album' ? 'bg-white/20 border-white/40 text-white shadow-[0_-5px_15px_rgba(255,255,255,0.1)]' : 'bg-black/10 border-white/10 text-white/60 hover:bg-white/10'}">
+                    <i data-lucide="book" class="w-4 h-4"></i> Mi Álbum
+                </button>
+                <button onclick="window.setTab('market')" class="flex-1 py-3 text-sm font-bold flex justify-center items-center gap-2 rounded-t-2xl transition-all duration-300 backdrop-blur-md border border-b-0 ${state.currentTab === 'market' ? 'bg-white/20 border-white/40 text-white shadow-[0_-5px_15px_rgba(255,255,255,0.1)]' : 'bg-black/10 border-white/10 text-white/60 hover:bg-white/10'}">
+                    <i data-lucide="refresh-ccw" class="w-4 h-4"></i> Mercado
+                </button>
+            </div>
+
+            <!-- CONTENIDO PRINCIPAL -->
+            <main class="p-4 max-w-4xl mx-auto bg-white/10 backdrop-blur-md border border-white/20 rounded-b-3xl rounded-tr-3xl shadow-2xl min-h-[70vh]">
+                ${state.currentTab === 'album' ? renderAlbum() : renderMarket()}
+            </main>
+
+            <!-- MODAL BORRAR -->
+            <div id="modal-container"></div>
+            `;
+        }
+
+        // --- SISTEMA DE DIBUJADO EFICIENTE ---
+        function render() {
+            const appDiv = document.getElementById('app');
+            if (state.loading && !state.firebaseUser && state.allUsersData.length === 0) {
+                appDiv.innerHTML = `<div class="min-h-screen flex items-center justify-center"><div class="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-white"></div></div>`;
+                return;
+            }
+
+            if (!state.virtualUser) appDiv.innerHTML = renderLogin();
+            else appDiv.innerHTML = renderApp();
+
+            renderModalOnly();
+            lucide.createIcons();
+        }
+
+        // Actualiza sólo la lista de equipos y estadísticas para no perder el foco del buscador
+        function renderTeamsOnly() {
+            if (state.currentTab !== 'album') return;
+            const teamsContainer = document.getElementById('teams-container');
+            const statsContainer = document.getElementById('stats-container');
+            if (teamsContainer) teamsContainer.innerHTML = renderTeamsHtml();
+            if (statsContainer) {
+                const stats = calculateStats();
+                statsContainer.innerHTML = `
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="font-bold text-white/90 text-lg uppercase tracking-wide">Tu Progreso</h3>
+                        <span class="text-green-400 font-extrabold text-2xl drop-shadow-md">${stats.percent}%</span>
+                    </div>
+                    <div class="w-full bg-black/40 rounded-full h-3 mb-5 border border-white/10 overflow-hidden shadow-inner">
+                        <div class="bg-gradient-to-r from-green-400 to-green-300 h-full rounded-full transition-all duration-1000 shadow-[0_0_10px_rgba(74,222,128,0.5)]" style="width: ${stats.percent}%"></div>
+                    </div>
+                    <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
+                        <div class="flex flex-col items-center bg-white/5 px-2 py-2 rounded-xl border border-white/10 flex-1 min-w-[30%] sm:min-w-[80px]">
+                            <span class="text-white/60 text-[10px] sm:text-xs uppercase mb-1 text-center">Obtenidas</span>
+                            <span class="font-bold text-base sm:text-lg leading-none">${stats.collected} <span class="text-white/40 text-xs sm:text-sm">/ ${TOTAL_STICKERS}</span></span>
+                        </div>
+                        <div class="flex flex-col items-center bg-white/5 px-2 py-2 rounded-xl border border-white/10 flex-1 min-w-[30%] sm:min-w-[80px]">
+                            <span class="text-white/60 text-[10px] sm:text-xs uppercase mb-1 text-center">Faltantes</span>
+                            <span class="font-bold text-base sm:text-lg leading-none">${TOTAL_STICKERS - stats.collected}</span>
+                        </div>
+                        <div class="flex flex-col items-center bg-blue-500/10 px-2 py-2 rounded-xl border border-blue-400/30 flex-1 min-w-[30%] sm:min-w-[80px]">
+                            <span class="text-blue-300 text-[10px] sm:text-xs uppercase mb-1 text-center">Repetidas</span>
+                            <span class="font-bold text-base sm:text-lg text-blue-300 leading-none">${stats.duplicates}</span>
+                        </div>
+                        <div class="w-full sm:w-auto mt-2 sm:mt-0 flex justify-end">
+                            <button onclick="window.setShowClearConfirm(true)" class="w-full sm:w-auto flex items-center justify-center gap-2 bg-red-500/10 hover:bg-red-500/30 text-red-300 border border-red-500/40 px-4 py-2.5 rounded-xl transition-all text-xs uppercase font-bold backdrop-blur-md">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i> Borrar Todo
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+            lucide.createIcons();
+        }
+
+        function renderModalOnly() {
+            const modalContainer = document.getElementById('modal-container');
+            if(!modalContainer) return;
+            
+            if(state.showClearConfirm) {
+                modalContainer.innerHTML = `
+                <div class="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md fade-in">
+                    <div class="bg-gradient-to-br from-gray-900 to-black border border-white/20 p-6 rounded-3xl shadow-2xl max-w-sm w-full text-center pointer-events-auto">
+                        <div class="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4 border border-red-500/50 text-red-400">
+                            <i data-lucide="alert-triangle" class="w-8 h-8"></i>
+                        </div>
+                        <h3 class="text-xl font-black text-white mb-2">¿Borrar todo el progreso?</h3>
+                        <p class="text-white/60 text-sm mb-6">Esta acción no se puede deshacer. Volverás a tener 0 figuritas.</p>
+                        <div class="flex gap-3">
+                            <button onclick="window.setShowClearConfirm(false)" class="flex-1 py-3 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 border border-white/10 transition-all">Cancelar</button>
+                            <button onclick="window.handleClearAlbum()" class="flex-1 py-3 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700 shadow-[0_0_15px_rgba(220,38,38,0.5)] transition-all">Sí, borrar</button>
+                        </div>
+                    </div>
+                </div>`;
+                lucide.createIcons();
+            } else {
+                modalContainer.innerHTML = '';
+            }
+        }
+
+        // Arrancar
+        init();
+    </script>
+</body>
+</html>
