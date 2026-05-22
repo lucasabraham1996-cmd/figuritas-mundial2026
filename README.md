@@ -1,0 +1,1 @@
+# figuritas-mundial2026
