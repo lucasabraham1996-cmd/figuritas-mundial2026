@@ -850,6 +850,7 @@
                 const details = TEAM_DETAILS[team] || { name: team, code: 'un', colors: ['#4B5563', '#1F2937', '#000000'] };
                 const count = getStickerCount(team);
                 const haveCount = Object.values(state.albumData[team] || {}).filter(s => s > 0).length;
+                const isComplete = haveCount === count;
                 
                 let flagHtml = details.code === 'fifa' ? `<div class="w-8 h-6 sm:w-10 sm:h-7 bg-yellow-500/20 rounded flex items-center justify-center text-yellow-400 border border-yellow-500/50">🏆</div>` : 
                                details.code === 'cc' ? `<div class="w-8 h-6 sm:w-10 sm:h-7 bg-red-500/20 rounded flex items-center justify-center text-red-400 border border-red-500/50">🥤</div>` : 
