@@ -8,6 +8,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- html2canvas para descargar imagenes -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
         /* Animaciones personalizadas */
         .animate-blob { animation: blob 7s infinite; }
@@ -142,12 +144,17 @@
             tradesData: [], // Almacena notificaciones e intercambios
             currentTab: 'album', // 'album', 'market', 'trade', 'notifications'
             loading: true,
+            saving: false,
             dbError: '',
             isNewUserMode: false,
             showClearConfirm: false,
+            showPrintModal: false,
+            showManualTradeModal: false,
             isRepetidasMode: false, // MODO: SOLO TILDAR REPETIDAS
             selectedMarketUser: null,
-            tradeDraft: null // { toUser, request: [], offer: [] }
+            tradeDraft: null, // { toUser, request: [], offer: [] }
+            manualTradeDraft: { given: [], received: [] },
+            manualTradeForm: { givenTeam: TEAMS[0], recTeam: TEAMS[0] }
         };
 
         // Función segura para cargar iconos
@@ -228,7 +235,6 @@
                 const trades = [];
                 snapshot.forEach(doc => trades.push({ id: doc.id, ...doc.data() }));
                 state.tradesData = trades;
-                // Forzar renderizado de la campanita y pantalla de notificaciones
                 if (state.virtualUser) render(); 
             });
         }
@@ -289,7 +295,7 @@
 
         window.toggleRepetidasMode = () => {
             state.isRepetidasMode = !state.isRepetidasMode;
-            render(); // Re-render para actualizar el botón de toggle
+            render(); 
         };
 
         // Función de toggle figurita en Mi Álbum
@@ -301,7 +307,6 @@
             const currentState = state.albumData[team][number] || 0;
             let nextState;
 
-            // MODO SOLO TILDAR REPETIDAS
             if (state.isRepetidasMode) {
                 if (currentState === 0 || currentState === 1) nextState = 2; // Pasa a tener 1 repetida (+1)
                 else if (currentState >= 2 && currentState < 4) nextState = currentState + 1; // Suma otra repetida
@@ -339,7 +344,180 @@
             } catch (error) { console.error(error); }
         };
 
-        // --- SISTEMA DE INTERCAMBIOS ---
+        // --- SISTEMA DE IMPRESIÓN ---
+        window.openPrintModal = () => { state.showPrintModal = true; renderModalOnly(); };
+        window.closePrintModal = () => { state.showPrintModal = false; renderModalOnly(); };
+        
+        window.executeDownload = (type) => {
+            // Mostrar estado de carga en el botón
+            const btn = document.getElementById(`btn-download-${type}`);
+            const originalText = btn ? btn.innerText : '';
+            if (btn) {
+                btn.innerHTML = `<div class="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white inline-block mr-2 align-middle"></div> Generando...`;
+                btn.disabled = true;
+            }
+
+            const titleMap = { 'faltantes': 'FALTANTES', 'obtenidas': 'OBTENIDAS', 'repetidas': 'REPETIDAS' };
+            const title = titleMap[type] || 'LISTA';
+            
+            // 1. Crear el contenedor invisible de la imagen
+            const container = document.createElement('div');
+            container.style.position = 'absolute';
+            container.style.left = '-9999px';
+            container.style.top = '0';
+            container.style.width = '800px';
+            container.style.backgroundColor = '#ffffff';
+            container.style.padding = '40px';
+            container.style.fontFamily = "'Helvetica Neue', Arial, sans-serif";
+            container.style.color = '#333';
+            container.style.zIndex = '-1';
+            
+            let totalFound = 0;
+            let listHtml = '';
+            
+            const sortedTeams = [...TEAMS].sort((a,b) => (TEAM_DETAILS[a]?.name || a).localeCompare((TEAM_DETAILS[b]?.name || b)));
+            
+            sortedTeams.forEach(team => {
+                const details = TEAM_DETAILS[team] || {name: team};
+                const count = getStickerCount(team);
+                let list = [];
+                for(let i=1; i<=count; i++) {
+                    const st = (state.albumData && state.albumData[team] && state.albumData[team][i]) || 0;
+                    if(type === 'faltantes' && st === 0) list.push(i);
+                    if(type === 'obtenidas' && st >= 1) list.push(i);
+                    if(type === 'repetidas' && st > 1) {
+                        const reps = st - 1;
+                        list.push(reps > 1 ? `<b>${i} (x${reps})</b>` : i);
+                    }
+                }
+                if(list.length > 0) {
+                    totalFound += list.length;
+                    listHtml += `
+                    <div style="margin-bottom: 15px; page-break-inside: avoid; break-inside: avoid-column; border-left: 4px solid #1e40af; padding-left: 10px;">
+                        <div style="font-weight: 900; font-size: 16px; color: #111; margin-bottom: 4px; text-transform: uppercase;">${details.name} <span style="color:#888; font-weight:normal; font-size:12px;">(${list.length})</span></div>
+                        <div style="color: #444; font-size: 15px; line-height: 1.6;">${list.join(', ')}</div>
+                    </div>`;
+                }
+            });
+            
+            container.innerHTML = `
+                <h1 style="color: #1e40af; border-bottom: 3px solid #1e40af; padding-bottom: 10px; margin-bottom: 20px; text-transform: uppercase; margin-top:0;">Mi Álbum 2026: ${title}</h1>
+                <div style="font-weight: bold; color: #047857; margin-bottom: 30px; font-size: 16px; background: #f0fdf4; padding: 10px; border-radius: 8px; display: inline-block;">Total figuritas listadas: ${totalFound}</div>
+                <div style="column-count: 2; column-gap: 40px;">
+                    ${listHtml}
+                </div>
+                <div style="margin-top: 40px; font-size: 12px; color: #aaa; text-align: right; border-top: 1px solid #eee; padding-top: 10px;">Generado por Planilla Virtual Mundial 2026</div>
+            `;
+            
+            document.body.appendChild(container);
+            
+            // 2. Tomar "foto" del contenedor y descargar
+            setTimeout(async () => {
+                try {
+                    const canvas = await html2canvas(container, {
+                        scale: 2, // Escala para alta resolución HD
+                        backgroundColor: '#ffffff',
+                        useCORS: true
+                    });
+                    
+                    const imgData = canvas.toDataURL('image/png');
+                    
+                    // 3. Ejecutar descarga
+                    const a = document.createElement('a');
+                    a.href = imgData;
+                    a.download = `Mundial_2026_${title}.png`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    
+                    window.closePrintModal();
+                } catch(error) {
+                    console.error("Error al generar imagen", error);
+                    alert("No se pudo generar la imagen. Inténtalo de nuevo.");
+                    if(btn) {
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+                    }
+                } finally {
+                    document.body.removeChild(container);
+                }
+            }, 150);
+        };
+
+        // --- SISTEMA DE CAMBIO MANUAL ---
+        window.openManualTradeModal = () => { 
+            state.manualTradeDraft = { given: [], received: [] };
+            state.showManualTradeModal = true; 
+            renderModalOnly(); 
+        };
+        window.closeManualTradeModal = () => { 
+            state.showManualTradeModal = false; 
+            renderModalOnly(); 
+        };
+
+        window.addManualTradeItem = (type) => {
+            const teamPrefix = type === 'given' ? 'given' : 'rec';
+            const team = document.getElementById(`manual-${teamPrefix}-team`).value;
+            const numStr = document.getElementById(`manual-${teamPrefix}-num`).value;
+            if(!numStr) return alert("Ingresa un número.");
+            const num = parseInt(numStr);
+            const max = getStickerCount(team);
+            
+            if(num < 1 || num > max) return alert('Número inválido para este país.');
+            
+            if(type === 'given') {
+                const st = (state.albumData && state.albumData[team] && state.albumData[team][num]) || 0;
+                const alreadyDrafted = state.manualTradeDraft.given.filter(i => i.team === team && i.num === num).length;
+                if(st <= 1 + alreadyDrafted) {
+                    return alert('No tienes suficientes repetidas de esta figurita para entregar.');
+                }
+            }
+            
+            state.manualTradeDraft[type].push({team, num});
+            state.manualTradeForm[`${teamPrefix}Team`] = team; // Guarda la selección
+            document.getElementById(`manual-${teamPrefix}-num`).value = ''; // Limpia el número
+            renderModalOnly();
+        };
+
+        window.removeManualTradeItem = (type, index) => {
+            state.manualTradeDraft[type].splice(index, 1);
+            renderModalOnly();
+        };
+
+        window.confirmManualTrade = async () => {
+            if(state.manualTradeDraft.given.length === 0 && state.manualTradeDraft.received.length === 0) return;
+            state.saving = true; renderModalOnly(); 
+            
+            const myAlbum = JSON.parse(JSON.stringify(state.albumData || {}));
+            
+            // Restar entregadas
+            state.manualTradeDraft.given.forEach(item => {
+                if(myAlbum[item.team] && myAlbum[item.team][item.num] > 1) {
+                    myAlbum[item.team][item.num] -= 1;
+                }
+            });
+            // Sumar recibidas
+            state.manualTradeDraft.received.forEach(item => {
+                if(!myAlbum[item.team]) myAlbum[item.team] = {};
+                const st = myAlbum[item.team][item.num] || 0;
+                if(st === 0) myAlbum[item.team][item.num] = 1; 
+                else myAlbum[item.team][item.num] = st + 1; 
+            });
+            
+            try {
+                const myRef = doc(db, 'artifacts', projectId, 'public', 'data', 'sticker_users', state.virtualUser.id);
+                await setDoc(myRef, { album: myAlbum }, { merge: true });
+                state.albumData = myAlbum;
+                state.showManualTradeModal = false;
+                render(); 
+            } catch(e) {
+                console.error(e);
+                alert("Error al actualizar el álbum.");
+            }
+            state.saving = false;
+        };
+
+        // --- SISTEMA DE INTERCAMBIOS OFICIALES (Mercado) ---
         window.openTradeDraft = (userId) => {
             const user = state.allUsersData.find(u => u.id === userId);
             state.tradeDraft = {
@@ -355,7 +533,7 @@
             const idx = list.findIndex(i => i.team === team && i.num === num);
             if (idx >= 0) list.splice(idx, 1);
             else list.push({team, num});
-            render(); // Re-render draft
+            render(); 
         };
 
         window.sendTradeProposal = async () => {
@@ -393,7 +571,7 @@
                     await setDoc(tradeRef, { status: 'accepted' }, { merge: true });
                     
                     // 2. Modificar MI álbum (Yo soy toId)
-                    const myAlbum = JSON.parse(JSON.stringify(state.albumData));
+                    const myAlbum = JSON.parse(JSON.stringify(state.albumData || {}));
                     trade.offer.forEach(item => { // Gano las que me ofrece
                         if(!myAlbum[item.team]) myAlbum[item.team] = {};
                         const st = myAlbum[item.team][item.num] || 0;
@@ -648,7 +826,7 @@
 
             return `
             <div class="space-y-6">
-                <!-- Estadísticas -->
+                <!-- Estadísticas y Botones de Acción -->
                 <div class="bg-black/20 backdrop-blur-xl rounded-2xl p-5 border border-white/20 shadow-lg flex flex-col fade-in">
                     <div class="flex justify-between items-center mb-3">
                         <h3 class="font-bold text-white/90 text-lg uppercase tracking-wide">Tu Progreso</h3>
@@ -658,7 +836,7 @@
                         <div id="stat-bar" class="bg-gradient-to-r from-green-400 to-green-300 h-full rounded-full transition-all duration-1000 shadow-[0_0_10px_rgba(74,222,128,0.5)]" style="width: ${stats.percent}%"></div>
                     </div>
                     
-                    <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
+                    <div class="flex flex-wrap items-center justify-between gap-3 text-sm mb-4">
                         <div class="flex flex-col items-center bg-white/5 px-2 py-2 rounded-xl border border-white/10 flex-1 min-w-[30%] sm:min-w-[80px]">
                             <span class="text-white/60 text-[10px] sm:text-xs uppercase mb-1 text-center">Obtenidas</span>
                             <span id="stat-collected" class="font-bold text-base sm:text-lg leading-none">${stats.collected} <span class="text-white/40 text-xs sm:text-sm">/ ${TOTAL_STICKERS}</span></span>
@@ -671,12 +849,19 @@
                             <span class="text-blue-300 text-[10px] sm:text-xs uppercase mb-1 text-center">Repetidas</span>
                             <span id="stat-duplicates" class="font-bold text-base sm:text-lg text-blue-300 leading-none">${stats.duplicates}</span>
                         </div>
-                        
-                        <div class="w-full sm:w-auto mt-2 sm:mt-0 flex justify-end">
-                            <button type="button" onclick="window.setShowClearConfirm(true)" class="w-full sm:w-auto flex items-center justify-center gap-2 bg-red-500/10 hover:bg-red-500/30 text-red-300 border border-red-500/40 px-4 py-2.5 rounded-xl transition-all text-xs uppercase font-bold backdrop-blur-md active:scale-95 cursor-pointer touch-manipulation">
-                                <i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i> Borrar Todo
-                            </button>
-                        </div>
+                    </div>
+
+                    <!-- NUEVA BARRA DE ACCIONES (Imprimir / Cambio Manual / Borrar) -->
+                    <div class="w-full mt-2 flex flex-wrap sm:flex-nowrap justify-end gap-2 border-t border-white/10 pt-4">
+                        <button type="button" onclick="window.openPrintModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 border border-indigo-500/40 px-3 py-2.5 rounded-xl transition-all text-[11px] sm:text-xs uppercase font-bold backdrop-blur-md active:scale-95 cursor-pointer touch-manipulation">
+                            <i data-lucide="download" class="w-4 h-4 pointer-events-none"></i> Descargar
+                        </button>
+                        <button type="button" onclick="window.openManualTradeModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-300 border border-emerald-500/40 px-3 py-2.5 rounded-xl transition-all text-[11px] sm:text-xs uppercase font-bold backdrop-blur-md active:scale-95 cursor-pointer touch-manipulation">
+                            <i data-lucide="refresh-cw" class="w-4 h-4 pointer-events-none"></i> Cambios
+                        </button>
+                        <button type="button" onclick="window.setShowClearConfirm(true)" class="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-red-500/10 hover:bg-red-500/30 text-red-300 border border-red-500/40 px-3 py-2.5 rounded-xl transition-all text-[11px] sm:text-xs uppercase font-bold backdrop-blur-md active:scale-95 cursor-pointer touch-manipulation">
+                            <i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i> Borrar
+                        </button>
                     </div>
                 </div>
 
@@ -687,7 +872,7 @@
                 <div class="flex items-center justify-between bg-black/30 p-4 rounded-2xl border ${state.isRepetidasMode ? 'border-green-400 shadow-[0_0_15px_rgba(74,222,128,0.3)]' : 'border-white/10'} mb-6 fade-in transition-all">
                     <div class="flex flex-col">
                         <span class="text-base font-bold text-white tracking-wide">SOLO TILDAR REPETIDAS</span>
-                        <span class="text-xs text-white/50">Toca para sumar repetidas directamente</span>
+                        <span class="text-xs text-white/50">Toca figuritas para sumar repetidas directamente</span>
                     </div>
                     <label class="flex items-center cursor-pointer touch-manipulation">
                         <div class="relative">
@@ -969,7 +1154,7 @@
                 ${state.currentTab === 'album' ? renderAlbum() : state.currentTab === 'trade' ? renderTradeDraft() : state.currentTab === 'notifications' ? renderNotifications() : renderMarket()}
             </main>
 
-            <!-- MODAL BORRAR -->
+            <!-- MODALES FLOTANTES -->
             <div id="modal-container"></div>
             `;
         }
@@ -1047,6 +1232,7 @@
         function renderModalOnly() {
             const modalContainer = document.getElementById('modal-container');
             if(!modalContainer) return;
+
             if(state.showClearConfirm) {
                 modalContainer.innerHTML = `
                 <div class="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md fade-in touch-manipulation">
@@ -1062,8 +1248,94 @@
                         </div>
                     </div>
                 </div>`;
-                loadIconsSafely();
-            } else modalContainer.innerHTML = '';
+            } else if(state.showPrintModal) {
+                modalContainer.innerHTML = `
+                <div class="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md fade-in touch-manipulation">
+                    <div class="bg-gradient-to-br from-gray-900 to-black border border-white/20 p-6 rounded-3xl shadow-2xl max-w-sm w-full text-center pointer-events-auto">
+                        <div class="w-16 h-16 bg-indigo-500/20 rounded-full flex items-center justify-center mx-auto mb-4 border border-indigo-500/50 text-indigo-400">
+                            <i data-lucide="download-cloud" class="w-8 h-8 pointer-events-none"></i>
+                        </div>
+                        <h3 class="text-xl font-black text-white mb-2">Descargar como Imagen</h3>
+                        <p class="text-white/60 text-sm mb-6">Selecciona la lista que deseas guardar en tu dispositivo.</p>
+                        
+                        <div class="flex flex-col gap-3 mb-6">
+                            <button id="btn-download-faltantes" onclick="window.executeDownload('faltantes')" class="w-full py-3 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 border border-white/20 transition-all disabled:opacity-50">Descargar Faltantes</button>
+                            <button id="btn-download-obtenidas" onclick="window.executeDownload('obtenidas')" class="w-full py-3 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 border border-white/20 transition-all disabled:opacity-50">Descargar Obtenidas</button>
+                            <button id="btn-download-repetidas" onclick="window.executeDownload('repetidas')" class="w-full py-3 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 border border-white/20 transition-all disabled:opacity-50">Descargar Repetidas</button>
+                        </div>
+
+                        <button onclick="window.closePrintModal()" class="w-full py-3 rounded-xl font-bold text-white/70 hover:text-white bg-transparent transition-all touch-manipulation cursor-pointer">Cancelar</button>
+                    </div>
+                </div>`;
+            } else if(state.showManualTradeModal) {
+                let givenHtml = state.manualTradeDraft.given.map((item, idx) => `
+                    <div class="flex justify-between items-center bg-black/20 p-2 rounded mb-1 border border-red-500/30">
+                        <span>${TEAM_DETAILS[item.team]?.name||item.team} <strong class="ml-1">${item.num}</strong></span>
+                        <button onclick="window.removeManualTradeItem('given', ${idx})" class="text-red-400 hover:text-red-300 px-2 py-1"><i data-lucide="x" class="w-4 h-4 pointer-events-none"></i></button>
+                    </div>
+                `).join('');
+                if(!givenHtml) givenHtml = `<p class="text-white/50 text-xs text-center py-2">Ninguna agregada</p>`;
+
+                let recHtml = state.manualTradeDraft.received.map((item, idx) => `
+                    <div class="flex justify-between items-center bg-black/20 p-2 rounded mb-1 border border-green-500/30">
+                        <span>${TEAM_DETAILS[item.team]?.name||item.team} <strong class="ml-1">${item.num}</strong></span>
+                        <button onclick="window.removeManualTradeItem('received', ${idx})" class="text-red-400 hover:text-red-300 px-2 py-1"><i data-lucide="x" class="w-4 h-4 pointer-events-none"></i></button>
+                    </div>
+                `).join('');
+                if(!recHtml) recHtml = `<p class="text-white/50 text-xs text-center py-2">Ninguna agregada</p>`;
+
+                const sortedOptions = [...TEAMS].sort((a,b) => (TEAM_DETAILS[a]?.name || a).localeCompare((TEAM_DETAILS[b]?.name || b)));
+                const teamOptionsGiven = sortedOptions.map(t => `<option value="${t}" ${t===state.manualTradeForm.givenTeam?'selected':''} class="bg-gray-800">${TEAM_DETAILS[t]?.name||t}</option>`).join('');
+                const teamOptionsRec = sortedOptions.map(t => `<option value="${t}" ${t===state.manualTradeForm.recTeam?'selected':''} class="bg-gray-800">${TEAM_DETAILS[t]?.name||t}</option>`).join('');
+
+                modalContainer.innerHTML = `
+                <div class="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md fade-in touch-manipulation overflow-y-auto">
+                    <div class="bg-gradient-to-br from-gray-900 to-black border border-white/20 p-6 rounded-3xl shadow-2xl max-w-2xl w-full pointer-events-auto my-auto max-h-[90vh] overflow-y-auto" style="-ms-overflow-style: none; scrollbar-width: none;">
+                        <h3 class="text-2xl font-black text-white mb-2 flex items-center gap-2"><i data-lucide="refresh-cw" class="w-6 h-6 text-emerald-400 pointer-events-none"></i> Cambio Manual</h3>
+                        <p class="text-white/60 text-sm mb-6">Actualiza tu álbum si intercambiaste figuritas físicamente.</p>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                            <!-- Entregué -->
+                            <div class="bg-red-500/10 border border-red-500/30 rounded-xl p-4">
+                                <h4 class="font-bold text-red-400 mb-3 uppercase tracking-wider text-sm">Entregué (Doy)</h4>
+                                <div class="flex gap-2 mb-3">
+                                    <select id="manual-given-team" onchange="state.manualTradeForm.givenTeam = this.value" class="w-full bg-black/40 border border-white/20 text-white rounded-lg px-2 py-2 outline-none focus:ring-1 focus:ring-red-400 text-sm appearance-none cursor-pointer">
+                                        ${teamOptionsGiven}
+                                    </select>
+                                    <input type="number" id="manual-given-num" min="1" max="20" placeholder="Nº" class="w-16 bg-black/40 border border-white/20 text-white rounded-lg px-2 py-2 outline-none focus:ring-1 focus:ring-red-400 text-sm text-center">
+                                    <button onclick="window.addManualTradeItem('given')" class="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg font-bold transition-all"><i data-lucide="plus" class="w-4 h-4 pointer-events-none"></i></button>
+                                </div>
+                                <div class="bg-black/30 rounded-lg p-2 min-h-[100px] max-h-[150px] overflow-y-auto border border-white/5">
+                                    ${givenHtml}
+                                </div>
+                            </div>
+
+                            <!-- Recibí -->
+                            <div class="bg-green-500/10 border border-green-500/30 rounded-xl p-4">
+                                <h4 class="font-bold text-green-400 mb-3 uppercase tracking-wider text-sm">Recibí (Me dan)</h4>
+                                <div class="flex gap-2 mb-3">
+                                    <select id="manual-rec-team" onchange="state.manualTradeForm.recTeam = this.value" class="w-full bg-black/40 border border-white/20 text-white rounded-lg px-2 py-2 outline-none focus:ring-1 focus:ring-green-400 text-sm appearance-none cursor-pointer">
+                                        ${teamOptionsRec}
+                                    </select>
+                                    <input type="number" id="manual-rec-num" min="1" max="20" placeholder="Nº" class="w-16 bg-black/40 border border-white/20 text-white rounded-lg px-2 py-2 outline-none focus:ring-1 focus:ring-green-400 text-sm text-center">
+                                    <button onclick="window.addManualTradeItem('received')" class="bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded-lg font-bold transition-all"><i data-lucide="plus" class="w-4 h-4 pointer-events-none"></i></button>
+                                </div>
+                                <div class="bg-black/30 rounded-lg p-2 min-h-[100px] max-h-[150px] overflow-y-auto border border-white/5">
+                                    ${recHtml}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="flex gap-3">
+                            <button onclick="window.closeManualTradeModal()" class="flex-1 py-3 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 active:scale-95 border border-white/10 transition-all touch-manipulation cursor-pointer">Cancelar</button>
+                            <button onclick="window.confirmManualTrade()" ${state.saving ? 'disabled' : ''} class="flex-1 py-3 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 active:scale-95 shadow-[0_0_15px_rgba(16,185,129,0.5)] transition-all touch-manipulation cursor-pointer">Confirmar Cambio</button>
+                        </div>
+                    </div>
+                </div>`;
+            } else {
+                modalContainer.innerHTML = '';
+            }
+            if(modalContainer.innerHTML !== '') loadIconsSafely();
         }
 
         // Arrancar
