@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -619,6 +620,45 @@
             if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         };
 
+        window.scrollToTop = () => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        window.markWholeTeam = async (team) => {
+            if (!state.virtualUser || !state.firebaseUser) return;
+
+            const count = getStickerCount(team);
+            if (!state.albumData) state.albumData = {};
+            if (!state.albumData[team]) state.albumData[team] = {};
+
+            let changed = false;
+            for (let i = 1; i <= count; i++) {
+                const currentState = state.albumData[team][i] || 0;
+                if (currentState === 0) {
+                    state.albumData[team][i] = 1;
+                    changed = true;
+                }
+            }
+
+            if (!changed) return;
+
+            for (let i = 1; i <= count; i++) {
+                const wrap = document.getElementById(`sticker-wrap-${team}-${i}`);
+                if (wrap) wrap.innerHTML = getStickerInnerHtml(team, i);
+            }
+
+            updateGlobalStatsOnly();
+            updateTeamCounterOnly(team);
+
+            try {
+                const userRef = doc(db, 'artifacts', projectId, 'public', 'data', 'sticker_users', state.virtualUser.id);
+                await setDoc(userRef, { album: state.albumData }, { merge: true });
+            } catch (error) {
+                console.error("Error guardando equipo completo", error);
+                alert("No se pudo guardar el equipo completo. Intentalo nuevamente.");
+            }
+        };
+
         window.setTab = (tab) => { state.currentTab = tab; render(); };
         window.setNewUserMode = (isNew) => { state.isNewUserMode = isNew; render(); };
         window.setShowClearConfirm = (val) => { state.showClearConfirm = val; renderModalOnly(); };
@@ -642,10 +682,22 @@
 
         function updateTeamCounterOnly(team) {
             const elCount = document.getElementById(`team-count-${team}`);
-            if(elCount) {
-                const count = getStickerCount(team);
-                const haveCount = Object.values(state.albumData[team] || {}).filter(s => s > 0).length;
-                elCount.innerText = `${haveCount} / ${count}`;
+            const btnComplete = document.getElementById(`team-complete-btn-${team}`);
+            const count = getStickerCount(team);
+            const haveCount = Object.values(state.albumData[team] || {}).filter(s => s > 0).length;
+            const isComplete = haveCount === count;
+
+            if(elCount) elCount.innerText = `${haveCount} / ${count}`;
+
+            if(btnComplete) {
+                btnComplete.disabled = isComplete;
+                btnComplete.innerHTML = isComplete
+                    ? `<i data-lucide="check-circle-2" class="w-4 h-4 pointer-events-none"></i> Completo`
+                    : `<i data-lucide="check-square" class="w-4 h-4 pointer-events-none"></i> Marcar todas`;
+                btnComplete.className = isComplete
+                    ? 'flex items-center justify-center gap-1.5 text-[10px] sm:text-xs bg-green-500/25 text-green-200 border border-green-400/40 px-3 py-1.5 rounded-full font-bold shadow-sm whitespace-nowrap cursor-default'
+                    : 'flex items-center justify-center gap-1.5 text-[10px] sm:text-xs bg-white/15 hover:bg-green-500/30 text-white border border-white/25 hover:border-green-400/60 px-3 py-1.5 rounded-full font-bold shadow-sm whitespace-nowrap active:scale-95 transition-all cursor-pointer touch-manipulation';
+                loadIconsSafely();
             }
         }
 
@@ -810,13 +862,18 @@
 
                 return `
                 <div id="team-section-${team}" class="bg-black/20 backdrop-blur-xl rounded-3xl overflow-hidden border border-white/20 shadow-xl scroll-smooth-offset">
-                    <div class="bg-gradient-to-r from-black/60 to-black/20 px-4 py-3 sm:px-5 sm:py-3 border-b border-white/10 flex justify-between items-center backdrop-blur-md">
+                    <div class="bg-gradient-to-r from-black/60 to-black/20 px-4 py-3 sm:px-5 sm:py-3 border-b border-white/10 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 backdrop-blur-md">
                         <span class="font-bold text-base sm:text-lg tracking-wide flex items-center gap-3">
                             ${flagHtml} ${details.name}
                         </span>
-                        <span id="team-count-${team}" class="text-xs bg-white/20 backdrop-blur-md border border-white/30 px-3 py-1.5 rounded-full font-bold shadow-sm whitespace-nowrap ml-2">
-                            ${haveCount} / ${count}
-                        </span>
+                        <div class="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
+                            <button id="team-complete-btn-${team}" type="button" onclick="window.markWholeTeam('${team}')" ${isComplete ? 'disabled' : ''} class="${isComplete ? 'flex items-center justify-center gap-1.5 text-[10px] sm:text-xs bg-green-500/25 text-green-200 border border-green-400/40 px-3 py-1.5 rounded-full font-bold shadow-sm whitespace-nowrap cursor-default' : 'flex items-center justify-center gap-1.5 text-[10px] sm:text-xs bg-white/15 hover:bg-green-500/30 text-white border border-white/25 hover:border-green-400/60 px-3 py-1.5 rounded-full font-bold shadow-sm whitespace-nowrap active:scale-95 transition-all cursor-pointer touch-manipulation'}">
+                                ${isComplete ? '<i data-lucide="check-circle-2" class="w-4 h-4 pointer-events-none"></i> Completo' : '<i data-lucide="check-square" class="w-4 h-4 pointer-events-none"></i> Marcar todas'}
+                            </button>
+                            <span id="team-count-${team}" class="text-xs bg-white/20 backdrop-blur-md border border-white/30 px-3 py-1.5 rounded-full font-bold shadow-sm whitespace-nowrap ml-2">
+                                ${haveCount} / ${count}
+                            </span>
+                        </div>
                     </div>
                     <div class="p-3 sm:p-5 grid grid-cols-4 sm:grid-cols-5 md:grid-cols-10 gap-x-2 gap-y-4 sm:gap-4 pt-6">
                         ${stickersHtml}
@@ -1153,6 +1210,11 @@
             <main class="p-4 max-w-4xl mx-auto bg-white/10 backdrop-blur-md border border-white/20 rounded-b-3xl rounded-tr-3xl shadow-2xl min-h-[70vh]">
                 ${state.currentTab === 'album' ? renderAlbum() : state.currentTab === 'trade' ? renderTradeDraft() : state.currentTab === 'notifications' ? renderNotifications() : renderMarket()}
             </main>
+
+            ${state.currentTab === 'album' ? `
+            <button type="button" onclick="window.scrollToTop()" class="fixed bottom-5 right-4 sm:right-6 z-40 flex items-center gap-2 bg-white text-gray-900 hover:bg-green-100 border border-white/70 px-4 py-3 rounded-full font-black text-xs sm:text-sm shadow-2xl active:scale-95 transition-all touch-manipulation cursor-pointer">
+                <i data-lucide="arrow-up" class="w-4 h-4 pointer-events-none"></i> Ir arriba
+            </button>` : ''}
 
             <!-- MODALES FLOTANTES -->
             <div id="modal-container"></div>
