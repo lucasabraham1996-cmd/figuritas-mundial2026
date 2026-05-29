@@ -1,4 +1,6 @@
 
+
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -152,11 +154,13 @@
             showPrintModal: false,
             showManualTradeModal: false,
             isRepetidasMode: false, // MODO: SOLO TILDAR REPETIDAS
+            voiceStatus: 'Listo para escuchar. Ej: Argentina 1 2 3, Brasil 10 al 15, o borrar México 5.',
             selectedMarketUser: null,
             tradeDraft: null, // { toUser, request: [], offer: [] }
             manualTradeDraft: { given: [], received: [] },
             manualTradeForm: { givenTeam: TEAMS[0], recTeam: TEAMS[0] }
         };
+        window.state = state;
 
         // Función segura para cargar iconos
         function loadIconsSafely() {
@@ -299,6 +303,20 @@
             render(); 
         };
 
+        async function saveAlbumData() {
+            if (!state.virtualUser || !state.firebaseUser) return;
+            const userRef = doc(db, 'artifacts', projectId, 'public', 'data', 'sticker_users', state.virtualUser.id);
+            await setDoc(userRef, { album: state.albumData }, { merge: true });
+        }
+
+        function refreshStickerAndStats(team, number) {
+            const wrap = document.getElementById(`sticker-wrap-${team}-${number}`);
+            if(wrap) wrap.innerHTML = getStickerInnerHtml(team, number);
+            updateGlobalStatsOnly();
+            updateTeamCounterOnly(team);
+            loadIconsSafely();
+        }
+
         // Función de toggle figurita en Mi Álbum
         window.toggleSticker = async (team, number) => {
             if (!state.virtualUser || !state.firebaseUser) return;
@@ -313,25 +331,27 @@
                 else if (currentState >= 2 && currentState < 4) nextState = currentState + 1; // Suma otra repetida
                 else nextState = 1; // Resetea a "solo la tengo", borra las repetidas
             } else {
-                nextState = (currentState + 1) % 5;
+                // Modo normal: un toque marca, otro toque suma repetida. Para sacar la figurita se usa la X.
+                nextState = currentState === 0 ? 1 : Math.min(currentState + 1, 4);
             }
             
-            if (nextState === 0) {
-                delete state.albumData[team][number]; 
-            } else {
-                state.albumData[team][number] = nextState;
+            state.albumData[team][number] = nextState;
+            refreshStickerAndStats(team, number);
+
+            try { await saveAlbumData(); }
+            catch (error) { console.error("Error guardando figurita", error); }
+        };
+
+        window.clearSticker = async (team, number, event) => {
+            if(event) event.stopPropagation();
+            if (!state.virtualUser || !state.firebaseUser) return;
+            if (state.albumData && state.albumData[team]) {
+                delete state.albumData[team][number];
+                if (Object.keys(state.albumData[team]).length === 0) delete state.albumData[team];
             }
-
-            const wrap = document.getElementById(`sticker-wrap-${team}-${number}`);
-            if(wrap) wrap.innerHTML = getStickerInnerHtml(team, number);
-            
-            updateGlobalStatsOnly();
-            updateTeamCounterOnly(team);
-
-            try {
-                const userRef = doc(db, 'artifacts', projectId, 'public', 'data', 'sticker_users', state.virtualUser.id);
-                await setDoc(userRef, { album: state.albumData }, { merge: true });
-            } catch (error) { console.error("Error guardando figurita", error); }
+            refreshStickerAndStats(team, number);
+            try { await saveAlbumData(); }
+            catch (error) { console.error("Error quitando figurita", error); }
         };
 
         window.handleClearAlbum = async () => {
@@ -640,6 +660,7 @@
                 }
             }
 
+            // Si ya estaban todas marcadas, no las toca. Para desmarcar una puntual está la X de cada figurita.
             if (!changed) return;
 
             for (let i = 1; i <= count; i++) {
@@ -649,15 +670,152 @@
 
             updateGlobalStatsOnly();
             updateTeamCounterOnly(team);
+            loadIconsSafely();
 
-            try {
-                const userRef = doc(db, 'artifacts', projectId, 'public', 'data', 'sticker_users', state.virtualUser.id);
-                await setDoc(userRef, { album: state.albumData }, { merge: true });
-            } catch (error) {
+            try { await saveAlbumData(); }
+            catch (error) {
                 console.error("Error guardando equipo completo", error);
                 alert("No se pudo guardar el equipo completo. Intentalo nuevamente.");
             }
         };
+
+        function normalizeVoiceText(text) {
+            return (text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+
+        const NUMBER_WORDS = {
+            uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10,
+            once: 11, doce: 12, trece: 13, catorce: 14, quince: 15, dieciseis: 16, diecisiete: 17, dieciocho: 18, diecinueve: 19, veinte: 20
+        };
+
+        function extractVoiceNumbers(text, max) {
+            const normalized = normalizeVoiceText(text);
+            const tokens = normalized.split(' ');
+            const converted = tokens.map(t => NUMBER_WORDS[t] || t).join(' ');
+            const numbers = [];
+
+            const rangeMatch = converted.match(/(\d+)\s*(?:al|a|hasta)\s*(\d+)/);
+            if (rangeMatch) {
+                const start = parseInt(rangeMatch[1]);
+                const end = parseInt(rangeMatch[2]);
+                const min = Math.min(start, end);
+                const top = Math.max(start, end);
+                for(let i=min; i<=top; i++) if(i >= 1 && i <= max) numbers.push(i);
+            }
+
+            const all = converted.match(/\d+/g) || [];
+            all.forEach(n => {
+                const value = parseInt(n);
+                if(value >= 1 && value <= max && !numbers.includes(value)) numbers.push(value);
+            });
+            return numbers;
+        }
+
+        function findTeamFromVoice(text) {
+            const normalized = normalizeVoiceText(text);
+            const aliases = [];
+            TEAMS.forEach(team => {
+                const details = TEAM_DETAILS[team] || { name: team };
+                aliases.push({ team, alias: normalizeVoiceText(team) });
+                aliases.push({ team, alias: normalizeVoiceText(details.name) });
+                if(team === 'FWC') aliases.push({ team, alias: 'fifa' }, { team, alias: 'especiales' }, { team, alias: 'especiales fifa' });
+                if(team === 'CC') aliases.push({ team, alias: 'coca cola' }, { team, alias: 'coca' });
+                if(team === 'RSA') aliases.push({ team, alias: 'sudafrica' });
+                if(team === 'KOR') aliases.push({ team, alias: 'corea' }, { team, alias: 'corea sur' });
+                if(team === 'CZE') aliases.push({ team, alias: 'checa' }, { team, alias: 'republica checa' });
+                if(team === 'BIH') aliases.push({ team, alias: 'bosnia' });
+                if(team === 'SCO') aliases.push({ team, alias: 'escocia' });
+                if(team === 'USA') aliases.push({ team, alias: 'estados unidos' }, { team, alias: 'eeuu' });
+                if(team === 'NED') aliases.push({ team, alias: 'paises bajos' }, { team, alias: 'holanda' });
+                if(team === 'KSA') aliases.push({ team, alias: 'arabia' }, { team, alias: 'arabia saudita' });
+                if(team === 'COD') aliases.push({ team, alias: 'congo' }, { team, alias: 'rd congo' });
+            });
+            aliases.sort((a,b) => b.alias.length - a.alias.length);
+            return aliases.find(item => item.alias && normalized.includes(item.alias))?.team || null;
+        }
+
+        window.processVoiceCommand = async (spokenText) => {
+            if (!state.virtualUser || !state.firebaseUser) return;
+            const team = findTeamFromVoice(spokenText);
+            if(!team) {
+                state.voiceStatus = `No pude reconocer el país en: "${spokenText}"`;
+                updateVoiceStatusOnly();
+                return;
+            }
+            const max = getStickerCount(team);
+            const numbers = extractVoiceNumbers(spokenText, max);
+            if(numbers.length === 0) {
+                state.voiceStatus = `Reconocí ${TEAM_DETAILS[team]?.name || team}, pero no encontré números válidos.`;
+                updateVoiceStatusOnly();
+                return;
+            }
+            if (!state.albumData) state.albumData = {};
+            if (!state.albumData[team]) state.albumData[team] = {};
+            const normalized = normalizeVoiceText(spokenText);
+            const shouldClear = /(borrar|borra|quitar|quita|sacar|saca|deseleccionar|desmarcar)/.test(normalized);
+            const asDuplicate = /(repetida|repetidas|duplicada|duplicadas)/.test(normalized) && !shouldClear;
+
+            numbers.forEach(num => {
+                if(shouldClear) delete state.albumData[team][num];
+                else if(asDuplicate) state.albumData[team][num] = Math.min(((state.albumData[team][num] || 1) + 1), 4);
+                else state.albumData[team][num] = Math.max(state.albumData[team][num] || 0, 1);
+
+                const wrap = document.getElementById(`sticker-wrap-${team}-${num}`);
+                if (wrap) wrap.innerHTML = getStickerInnerHtml(team, num);
+            });
+            if (Object.keys(state.albumData[team] || {}).length === 0) delete state.albumData[team];
+            updateGlobalStatsOnly();
+            updateTeamCounterOnly(team);
+            loadIconsSafely();
+
+            try {
+                await saveAlbumData();
+                state.voiceStatus = `${shouldClear ? 'Desmarqué' : asDuplicate ? 'Marqué como repetidas' : 'Marqué'} ${TEAM_DETAILS[team]?.name || team}: ${numbers.join(', ')}.`;
+            } catch (error) {
+                console.error('Error guardando comando por voz', error);
+                state.voiceStatus = 'Reconocí el pedido, pero no pude guardarlo. Revisá la conexión.';
+            }
+            updateVoiceStatusOnly();
+        };
+
+        window.startVoiceMarking = () => {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if(!SpeechRecognition) {
+                state.voiceStatus = 'Tu navegador no permite dictado por voz. Probá desde Chrome.';
+                updateVoiceStatusOnly();
+                return;
+            }
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'es-AR';
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+            state.voiceStatus = 'Escuchando... decí algo como: Argentina 1 2 3.';
+            updateVoiceStatusOnly();
+            recognition.onresult = (event) => {
+                const text = event.results[0][0].transcript;
+                state.voiceStatus = `Escuché: "${text}"`;
+                updateVoiceStatusOnly();
+                window.processVoiceCommand(text);
+            };
+            recognition.onerror = () => {
+                state.voiceStatus = 'No pude escuchar bien. Tocá el micrófono e intentalo de nuevo.';
+                updateVoiceStatusOnly();
+            };
+            recognition.start();
+        };
+
+        window.applyTypedVoiceCommand = () => {
+            const input = document.getElementById('voice-command-input');
+            const text = input?.value || '';
+            if(!text.trim()) return;
+            window.processVoiceCommand(text);
+            input.value = '';
+        };
+
+        function updateVoiceStatusOnly() {
+            const el = document.getElementById('voice-status');
+            if(el) el.innerText = state.voiceStatus;
+        }
 
         window.setTab = (tab) => { state.currentTab = tab; render(); };
         window.setNewUserMode = (isNew) => { state.isNewUserMode = isNew; render(); };
@@ -678,6 +836,8 @@
             if(elCol) elCol.innerHTML = `${stats.collected} <span class="text-white/40 text-xs sm:text-sm">/ ${TOTAL_STICKERS}</span>`;
             if(elMis) elMis.innerText = TOTAL_STICKERS - stats.collected;
             if(elDup) elDup.innerText = stats.duplicates;
+            const rankings = document.getElementById('progress-rankings');
+            if(rankings) rankings.innerHTML = renderProgressRankings();
         }
 
         function updateTeamCounterOnly(team) {
@@ -712,6 +872,57 @@
                 });
             }
             return { collected, duplicates, percent: Math.round((collected / TOTAL_STICKERS) * 100) };
+        }
+
+        function calculateTeamProgress() {
+            return TEAMS.map(team => {
+                const count = getStickerCount(team);
+                const have = Object.values((state.albumData && state.albumData[team]) || {}).filter(s => s > 0).length;
+                return {
+                    team,
+                    name: TEAM_DETAILS[team]?.name || team,
+                    count,
+                    have,
+                    missing: count - have,
+                    percent: Math.round((have / count) * 100)
+                };
+            });
+        }
+
+        function renderRankingList(items, emptyText, badgeClass = 'bg-white/10 text-white') {
+            if(!items.length) return `<div class="text-white/45 text-xs py-2">${emptyText}</div>`;
+            return items.map((item, index) => `
+                <div onclick="window.scrollToTeam('${item.team}')" class="flex items-center justify-between gap-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl px-3 py-2 cursor-pointer transition-all active:scale-95">
+                    <div class="min-w-0">
+                        <div class="text-sm font-bold truncate">${index + 1}. ${item.name}</div>
+                        <div class="text-[11px] text-white/45">${item.have}/${item.count} · ${item.percent}%</div>
+                    </div>
+                    <span class="text-[11px] font-black px-2 py-1 rounded-lg whitespace-nowrap ${badgeClass}">${item.missing === 0 ? 'Completa' : `Faltan ${item.missing}`}</span>
+                </div>
+            `).join('');
+        }
+
+        function renderProgressRankings() {
+            const progress = calculateTeamProgress();
+            const complete = progress.filter(t => t.missing === 0).sort((a,b) => a.name.localeCompare(b.name)).slice(0, 5);
+            const almost = progress.filter(t => t.missing > 0).sort((a,b) => a.missing - b.missing || b.have - a.have || a.name.localeCompare(b.name)).slice(0, 5);
+            const farthest = progress.filter(t => t.missing > 0).sort((a,b) => b.missing - a.missing || a.have - b.have || a.name.localeCompare(b.name)).slice(0, 5);
+            return `
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div class="bg-black/20 rounded-2xl border border-green-400/20 p-3">
+                        <h4 class="text-xs font-black uppercase tracking-widest text-green-300 mb-2 flex items-center gap-1"><i data-lucide="trophy" class="w-3 h-3"></i> 5 completas</h4>
+                        <div class="space-y-2">${renderRankingList(complete, 'Todavía no hay selecciones completas.', 'bg-green-400/20 text-green-200 border border-green-400/30')}</div>
+                    </div>
+                    <div class="bg-black/20 rounded-2xl border border-yellow-400/20 p-3">
+                        <h4 class="text-xs font-black uppercase tracking-widest text-yellow-300 mb-2 flex items-center gap-1"><i data-lucide="target" class="w-3 h-3"></i> Menos faltan</h4>
+                        <div class="space-y-2">${renderRankingList(almost, 'No hay pendientes para mostrar.', 'bg-yellow-400/20 text-yellow-100 border border-yellow-400/30')}</div>
+                    </div>
+                    <div class="bg-black/20 rounded-2xl border border-red-400/20 p-3">
+                        <h4 class="text-xs font-black uppercase tracking-widest text-red-300 mb-2 flex items-center gap-1"><i data-lucide="alert-circle" class="w-3 h-3"></i> Más faltan</h4>
+                        <div class="space-y-2">${renderRankingList(farthest, 'No hay pendientes para mostrar.', 'bg-red-400/20 text-red-100 border border-red-400/30')}</div>
+                    </div>
+                </div>
+            `;
         }
 
         function getMyDuplicates() {
@@ -819,7 +1030,8 @@
                     <div class="absolute bottom-1 left-1 w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center font-black text-xs sm:text-sm shadow-md transition-all z-10 pointer-events-none ${isMissing ? 'bg-black/20 text-white/50 backdrop-blur-sm' : 'bg-white text-gray-900'}">${num}</div>
                     ${iconBadge}
                 </button>
-                ${reps > 0 ? `<div class="absolute -top-3 -right-2 sm:-right-3 bg-blue-500 text-white text-[10px] sm:text-xs font-black w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center border-2 border-white shadow-lg z-20 pointer-events-none">+${reps}</div>` : ''}
+                ${isHave ? `<button type="button" onclick="window.clearSticker('${team}', ${num}, event)" title="Deseleccionar figurita" aria-label="Deseleccionar figurita" class="absolute -top-3 -right-2 sm:-right-3 bg-red-500 hover:bg-red-600 text-white w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center border-2 border-white shadow-lg z-30 active:scale-90 transition-all"><i data-lucide="x" class="w-3 h-3 sm:w-4 sm:h-4 pointer-events-none"></i></button>` : ''}
+                ${reps > 0 ? `<div class="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-500 text-white text-[10px] sm:text-xs font-black w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center border-2 border-white shadow-lg z-20 pointer-events-none">+${reps}</div>` : ''}
             `;
         }
 
@@ -907,6 +1119,23 @@
                             <span class="text-blue-300 text-[10px] sm:text-xs uppercase mb-1 text-center">Repetidas</span>
                             <span id="stat-duplicates" class="font-bold text-base sm:text-lg text-blue-300 leading-none">${stats.duplicates}</span>
                         </div>
+                    </div>
+
+                    <div id="progress-rankings" class="mb-4">
+                        ${renderProgressRankings()}
+                    </div>
+
+                    <div class="mb-4 bg-black/20 border border-white/10 rounded-2xl p-3">
+                        <div class="flex flex-col sm:flex-row gap-2 sm:items-center">
+                            <button type="button" onclick="window.startVoiceMarking()" class="flex items-center justify-center gap-2 bg-pink-500/20 hover:bg-pink-500/40 text-pink-200 border border-pink-400/40 px-3 py-2.5 rounded-xl transition-all text-[11px] sm:text-xs uppercase font-bold active:scale-95 cursor-pointer touch-manipulation">
+                                <i data-lucide="mic" class="w-4 h-4 pointer-events-none"></i> Marcar por voz
+                            </button>
+                            <div class="flex flex-1 gap-2">
+                                <input id="voice-command-input" type="text" placeholder="También podés escribir: Argentina 1 2 3" class="flex-1 bg-black/30 border border-white/15 rounded-xl px-3 py-2 text-xs text-white placeholder-white/35 outline-none focus:ring-2 focus:ring-pink-400/60" onkeydown="if(event.key==='Enter'){window.applyTypedVoiceCommand();}">
+                                <button type="button" onclick="window.applyTypedVoiceCommand()" class="bg-white/10 hover:bg-white/20 border border-white/15 rounded-xl px-3 py-2 text-xs font-bold active:scale-95">OK</button>
+                            </div>
+                        </div>
+                        <p id="voice-status" class="text-white/55 text-xs mt-2 leading-relaxed">${state.voiceStatus}</p>
                     </div>
 
                     <!-- NUEVA BARRA DE ACCIONES (Imprimir / Cambio Manual / Borrar) -->
