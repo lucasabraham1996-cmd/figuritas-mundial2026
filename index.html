@@ -39,6 +39,38 @@
         .toggle-checkbox:checked { right: 0; border-color: #4ade80; }
         .toggle-checkbox:checked + .toggle-label { background-color: #4ade80; }
         .toggle-checkbox:checked + .toggle-label:before { transform: translateX(100%); }
+
+        .repeat-pill {
+            background: linear-gradient(135deg, rgba(56,189,248,0.95), rgba(59,130,246,0.95), rgba(79,70,229,0.95));
+            box-shadow: 0 8px 18px rgba(37,99,235,0.35);
+        }
+        .repeat-pill-soft {
+            background: linear-gradient(135deg, rgba(14,165,233,0.88), rgba(37,99,235,0.88));
+            box-shadow: 0 6px 14px rgba(14,165,233,0.25);
+        }
+        .sticker-metal::after {
+            content: '';
+            position: absolute;
+            inset: -35% auto -35% -55%;
+            width: 55%;
+            transform: rotate(24deg);
+            background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.42), rgba(255,255,255,0));
+            animation: metalShine 3.6s linear infinite;
+            pointer-events: none;
+        }
+        @keyframes metalShine {
+            0% { transform: translateX(-160%) rotate(24deg); opacity: .15; }
+            35% { opacity: .6; }
+            100% { transform: translateX(320%) rotate(24deg); opacity: .05; }
+        }
+        .team-progress-track {
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.08);
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.25);
+        }
+        .team-progress-fill {
+            box-shadow: 0 0 12px rgba(74,222,128,0.35);
+        }
     </style>
 </head>
 <body class="bg-gradient-to-br from-[#1e40af] via-[#047857] to-[#be123c] bg-fixed text-white min-h-screen font-sans selection:bg-white/30 pb-20">
@@ -343,15 +375,35 @@
         };
 
         window.clearSticker = async (team, number, event) => {
-            if(event) event.stopPropagation();
-            if (!state.virtualUser || !state.firebaseUser) return;
+            if(event) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            if (!state.virtualUser || !state.firebaseUser) return false;
+
+            const previousAlbum = JSON.parse(JSON.stringify(state.albumData || {}));
+
             if (state.albumData && state.albumData[team]) {
                 delete state.albumData[team][number];
                 if (Object.keys(state.albumData[team]).length === 0) delete state.albumData[team];
             }
+
             refreshStickerAndStats(team, number);
-            try { await saveAlbumData(); }
-            catch (error) { console.error("Error quitando figurita", error); }
+
+            try {
+                const userRef = doc(db, 'artifacts', projectId, 'public', 'data', 'sticker_users', state.virtualUser.id);
+                await updateDoc(userRef, { [`album.${team}.${number}`]: deleteField() });
+                if (!state.albumData[team] || Object.keys(state.albumData[team]).length === 0) {
+                    await updateDoc(userRef, { [`album.${team}`]: deleteField() });
+                }
+                await saveAlbumData(state.albumData);
+            } catch (error) {
+                console.error("Error quitando figurita", error);
+                state.albumData = previousAlbum;
+                refreshStickerAndStats(team, number);
+                alert("No se pudo quitar la figurita de Firebase. Revisá la conexión e intentalo de nuevo.");
+            }
+            return false;
         };
 
         window.handleClearAlbum = async () => {
@@ -842,12 +894,17 @@
 
         function updateTeamCounterOnly(team) {
             const elCount = document.getElementById(`team-count-${team}`);
+            const elProgressBar = document.getElementById(`team-progress-${team}`);
+            const elProgressText = document.getElementById(`team-progress-text-${team}`);
             const btnComplete = document.getElementById(`team-complete-btn-${team}`);
             const count = getStickerCount(team);
             const haveCount = Object.values(state.albumData[team] || {}).filter(s => s > 0).length;
+            const percent = Math.round((haveCount / count) * 100);
             const isComplete = haveCount === count;
 
             if(elCount) elCount.innerText = `${haveCount} / ${count}`;
+            if(elProgressBar) elProgressBar.style.width = `${percent}%`;
+            if(elProgressText) elProgressText.innerText = `${percent}% completo`;
 
             if(btnComplete) {
                 btnComplete.disabled = isComplete;
@@ -889,40 +946,111 @@
             });
         }
 
-        function renderRankingList(items, emptyText, badgeClass = 'bg-white/10 text-white') {
+        function getTeamFlagHtml(team, imgClass = 'w-9 h-6 rounded-md', wrapperClass = '') {
+            const details = TEAM_DETAILS[team] || { code: 'un', name: team };
+            if (details.code === 'fifa') {
+                return `<div class="${imgClass} ${wrapperClass} bg-yellow-500/20 border border-yellow-400/40 text-yellow-300 flex items-center justify-center">🏆</div>`;
+            }
+            if (details.code === 'cc') {
+                return `<div class="${imgClass} ${wrapperClass} bg-red-500/20 border border-red-400/40 text-red-200 flex items-center justify-center">🥤</div>`;
+            }
+            return `<img src="https://flagcdn.com/w80/${details.code}.png" alt="${details.name}" class="${imgClass} ${wrapperClass} object-cover shadow-sm border border-white/15" />`;
+        }
+
+        function renderRankingList(items, emptyText, badgeClass = 'bg-white/10 text-white', options = {}) {
             if(!items.length) return `<div class="text-white/45 text-xs py-2">${emptyText}</div>`;
-            return items.map((item, index) => `
-                <div onclick="window.scrollToTeam('${item.team}')" class="flex items-center justify-between gap-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl px-3 py-2 cursor-pointer transition-all active:scale-95">
-                    <div class="min-w-0">
-                        <div class="text-sm font-bold truncate">${index + 1}. ${item.name}</div>
-                        <div class="text-[11px] text-white/45">${item.have}/${item.count} · ${item.percent}%</div>
-                    </div>
-                    <span class="text-[11px] font-black px-2 py-1 rounded-lg whitespace-nowrap ${badgeClass}">${item.missing === 0 ? 'Completa' : `Faltan ${item.missing}`}</span>
-                </div>
-            `).join('');
+            const listClass = options.scrollable ? 'max-h-72 overflow-y-auto pr-1' : '';
+            return `
+                <div class="space-y-2 ${listClass}">
+                    ${items.map((item, index) => `
+                        <div onclick="window.scrollToTeam('${item.team}')" class="flex items-center justify-between gap-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl px-3 py-2 cursor-pointer transition-all active:scale-95">
+                            <div class="flex items-center gap-3 min-w-0">
+                                <div class="shrink-0">${getTeamFlagHtml(item.team, 'w-10 h-7 rounded-md')}</div>
+                                <div class="min-w-0">
+                                    <div class="text-[11px] text-white/55 font-semibold">${index + 1}. ${item.have}/${item.count}</div>
+                                    <div class="text-xs font-black">${item.percent}%</div>
+                                </div>
+                            </div>
+                            <span class="text-[11px] font-black px-2 py-1 rounded-lg whitespace-nowrap ${badgeClass}">${item.missing === 0 ? 'Completa' : `Faltan ${item.missing}`}</span>
+                        </div>
+                    `).join('')}
+                </div>`;
         }
 
         function renderProgressRankings() {
             const progress = calculateTeamProgress();
-            const complete = progress.filter(t => t.missing === 0).sort((a,b) => a.name.localeCompare(b.name)).slice(0, 5);
+            const complete = progress.filter(t => t.missing === 0).sort((a,b) => a.name.localeCompare(b.name));
             const almost = progress.filter(t => t.missing > 0).sort((a,b) => a.missing - b.missing || b.have - a.have || a.name.localeCompare(b.name)).slice(0, 5);
             const farthest = progress.filter(t => t.missing > 0).sort((a,b) => b.missing - a.missing || a.have - b.have || a.name.localeCompare(b.name)).slice(0, 5);
             return `
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div class="bg-black/20 rounded-2xl border border-green-400/20 p-3">
-                        <h4 class="text-xs font-black uppercase tracking-widest text-green-300 mb-2 flex items-center gap-1"><i data-lucide="trophy" class="w-3 h-3"></i> 5 completas</h4>
-                        <div class="space-y-2">${renderRankingList(complete, 'Todavía no hay selecciones completas.', 'bg-green-400/20 text-green-200 border border-green-400/30')}</div>
+                        <h4 class="text-xs font-black uppercase tracking-widest text-green-300 mb-2 flex items-center gap-1"><i data-lucide="trophy" class="w-3 h-3"></i> Completas</h4>
+                        ${renderRankingList(complete, 'Todavía no hay selecciones completas.', 'bg-green-400/20 text-green-200 border border-green-400/30', { scrollable: true })}
                     </div>
                     <div class="bg-black/20 rounded-2xl border border-yellow-400/20 p-3">
-                        <h4 class="text-xs font-black uppercase tracking-widest text-yellow-300 mb-2 flex items-center gap-1"><i data-lucide="target" class="w-3 h-3"></i> Menos faltan</h4>
-                        <div class="space-y-2">${renderRankingList(almost, 'No hay pendientes para mostrar.', 'bg-yellow-400/20 text-yellow-100 border border-yellow-400/30')}</div>
+                        <h4 class="text-xs font-black uppercase tracking-widest text-yellow-300 mb-2 flex items-center gap-1"><i data-lucide="target" class="w-3 h-3"></i> 5 más cerca</h4>
+                        ${renderRankingList(almost, 'No hay pendientes para mostrar.', 'bg-yellow-400/20 text-yellow-100 border border-yellow-400/30')}
                     </div>
                     <div class="bg-black/20 rounded-2xl border border-red-400/20 p-3">
-                        <h4 class="text-xs font-black uppercase tracking-widest text-red-300 mb-2 flex items-center gap-1"><i data-lucide="alert-circle" class="w-3 h-3"></i> Más faltan</h4>
-                        <div class="space-y-2">${renderRankingList(farthest, 'No hay pendientes para mostrar.', 'bg-red-400/20 text-red-100 border border-red-400/30')}</div>
+                        <h4 class="text-xs font-black uppercase tracking-widest text-red-300 mb-2 flex items-center gap-1"><i data-lucide="alert-circle" class="w-3 h-3"></i> 5 que más faltan</h4>
+                        ${renderRankingList(farthest, 'No hay pendientes para mostrar.', 'bg-red-400/20 text-red-100 border border-red-400/30')}
                     </div>
                 </div>
             `;
+        }
+
+        function buildJerseyHtml(primary, secondary, accent, compact = false) {
+            const size = compact ? 'w-4 h-5' : 'w-5 sm:w-6 h-6 sm:h-7';
+            const sleeve = compact ? 'w-1.5 h-2' : 'w-2 sm:w-2.5 h-2.5 sm:h-3';
+            return `
+                <div class="relative ${size} drop-shadow-sm">
+                    <div class="absolute left-1/2 -translate-x-1/2 top-0 w-[58%] h-[22%] rounded-t-md border border-white/60" style="background:${accent};"></div>
+                    <div class="absolute left-0 top-[10%] ${sleeve} rounded-l-md border border-white/60" style="background:${primary};"></div>
+                    <div class="absolute right-0 top-[10%] ${sleeve} rounded-r-md border border-white/60" style="background:${secondary};"></div>
+                    <div class="absolute inset-x-[14%] top-[16%] bottom-0 rounded-b-lg border border-white/60" style="background:linear-gradient(180deg, ${primary}, ${secondary});"></div>
+                </div>`;
+        }
+
+        function getSpecialStickerArt(team, num, isHave, compact = false) {
+            const details = TEAM_DETAILS[team] || { code: 'un', colors: ['#4B5563', '#1F2937', '#000000'], name: team };
+            const isCountry = details.code !== 'fifa' && details.code !== 'cc';
+            if (!isHave || !isCountry) return '';
+            const flagUrl = `https://flagcdn.com/w160/${details.code}.png`;
+            const [c1, c2, c3] = details.colors;
+
+            if (num === 1) {
+                return `
+                    <div class="absolute inset-1 rounded-[16px] overflow-hidden pointer-events-none sticker-metal">
+                        <div class="absolute inset-0" style="background:linear-gradient(145deg, ${c1}, ${c2} 52%, ${c3});"></div>
+                        <div class="absolute inset-0 opacity-45" style="background:radial-gradient(circle at 25% 20%, rgba(255,255,255,0.55), transparent 28%), radial-gradient(circle at 80% 18%, rgba(255,255,255,0.35), transparent 22%), linear-gradient(135deg, transparent 0 25%, rgba(255,255,255,0.14) 25% 35%, transparent 35% 60%, rgba(255,255,255,0.10) 60% 70%, transparent 70% 100%);"></div>
+                        <div class="absolute inset-[14%] rounded-[18px] border border-white/40 bg-black/10 backdrop-blur-[2px] flex items-center justify-center shadow-[inset_0_1px_8px_rgba(255,255,255,0.2)]">
+                            <div class="w-[58%] aspect-square rounded-full overflow-hidden border-2 border-white/80 shadow-[0_0_14px_rgba(255,255,255,0.35)] bg-white/90 flex items-center justify-center">
+                                <img src="${flagUrl}" alt="${details.name}" class="w-full h-full object-cover" />
+                            </div>
+                        </div>
+                    </div>`;
+            }
+
+            if (num === 13) {
+                return `
+                    <div class="absolute inset-1 rounded-[16px] overflow-hidden pointer-events-none">
+                        <div class="absolute inset-0" style="background:linear-gradient(155deg, ${c3}, ${c1} 55%, ${c2});"></div>
+                        <div class="absolute inset-0 opacity-35" style="background:radial-gradient(circle at 20% 18%, rgba(255,255,255,0.35), transparent 28%), linear-gradient(135deg, transparent 0 30%, rgba(255,255,255,0.12) 30% 40%, transparent 40% 100%);"></div>
+                        <div class="absolute inset-x-[8%] inset-y-[16%] rounded-2xl border border-white/25 bg-black/10 backdrop-blur-[2px] flex items-center justify-center gap-2 sm:gap-3">
+                            ${buildJerseyHtml(c1, c2, c3, compact)}
+                            ${buildJerseyHtml(c2, c1, c3, compact)}
+                            ${buildJerseyHtml(c3, c2, c1, compact)}
+                        </div>
+                    </div>`;
+            }
+            return '';
+        }
+
+        function getRepeatBadgeHtml(reps, compact = false) {
+            if (reps <= 0) return '';
+            const size = compact ? 'text-[9px] px-2 py-[3px] top-1.5' : 'text-[10px] sm:text-xs px-2.5 py-1 top-2';
+            return `<div class="absolute left-1/2 -translate-x-1/2 ${size} rounded-full repeat-pill text-white font-black border border-white/55 z-20 pointer-events-none tracking-wide">REP +${reps}</div>`;
         }
 
         function getMyDuplicates() {
@@ -946,45 +1074,47 @@
             const isHave = stateCode >= 1;
             const reps = stateCode > 1 ? stateCode - 1 : 0;
             const bgColor = isHave ? details.colors[0] : '';
-            
-            const maskColorsHtml = isHave ? `
+            const isWide = num === 13 && details.code !== 'fifa' && details.code !== 'cc';
+            const specialArt = getSpecialStickerArt(team, num, isHave, true);
+
+            const maskColorsHtml = (!specialArt && isHave) ? `
                 <div class="absolute inset-0 transition-all duration-300 opacity-90 pointer-events-none"
                      style="background: radial-gradient(ellipse at 50% 50%, ${details.colors[2]} 0%, ${details.colors[2]} 30%, ${details.colors[1]} 31%, ${details.colors[1]} 100%);
                             mask-image: url('${LOGO_URL}'); -webkit-mask-image: url('${LOGO_URL}');
                             mask-size: 85%; -webkit-mask-size: 85%; mask-position: center; -webkit-mask-position: center; mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat;">
                 </div>
-            ` : `
+            ` : (!specialArt ? `
                 <div class="absolute inset-0 mix-blend-overlay opacity-30 pointer-events-none"
                      style="background-image: url('${LOGO_URL}'); background-size: 85%; background-position: center; background-repeat: no-repeat; filter: grayscale(100%) brightness(200%);">
                 </div>
-            `;
+            ` : '');
 
             let iconBadge = '';
             if(isHave && details.code !== 'fifa' && details.code !== 'cc') {
-                iconBadge = `<div class="absolute bottom-[2px] right-[2px] w-[35%] h-[35%] rounded-full overflow-hidden border border-white shadow-md z-10 bg-white flex items-center justify-center pointer-events-none"><img src="https://flagcdn.com/w40/${details.code}.png" class="w-full h-full object-cover pointer-events-none" /></div>`;
+                iconBadge = `<div class="absolute bottom-[2px] right-[2px] w-[30%] h-[30%] rounded-full overflow-hidden border border-white shadow-md z-10 bg-white flex items-center justify-center pointer-events-none"><img src="https://flagcdn.com/w40/${details.code}.png" class="w-full h-full object-cover pointer-events-none" /></div>`;
             } else if (isHave && details.code === 'fifa') {
-                iconBadge = `<div class="absolute bottom-[2px] right-[2px] w-[35%] h-[35%] rounded-full overflow-hidden border border-white shadow-md z-10 bg-yellow-400 flex items-center justify-center text-[10px] sm:text-xs pointer-events-none">🏆</div>`;
+                iconBadge = `<div class="absolute bottom-[2px] right-[2px] w-[30%] h-[30%] rounded-full overflow-hidden border border-white shadow-md z-10 bg-yellow-400 flex items-center justify-center text-[10px] sm:text-xs pointer-events-none">🏆</div>`;
             } else if (isHave && details.code === 'cc') {
-                iconBadge = `<div class="absolute bottom-[2px] right-[2px] w-[35%] h-[35%] rounded-full overflow-hidden border border-white shadow-md z-10 bg-red-600 flex items-center justify-center text-[10px] sm:text-xs pointer-events-none">🥤</div>`;
+                iconBadge = `<div class="absolute bottom-[2px] right-[2px] w-[30%] h-[30%] rounded-full overflow-hidden border border-white shadow-md z-10 bg-red-600 flex items-center justify-center text-[10px] sm:text-xs pointer-events-none">🥤</div>`;
             }
 
-            const borderClass = isSelected ? 'border-[3px] border-green-400 shadow-[0_0_15px_rgba(74,222,128,0.8)] scale-105' : (isMissing ? 'border border-white/20' : 'border-[2px] border-white/90 shadow-md');
+            const borderClass = isSelected ? 'border-[3px] border-green-400 shadow-[0_0_15px_rgba(74,222,128,0.8)] scale-105' : (isMissing ? 'border border-white/20' : `border-[2px] border-white/90 shadow-md ${reps > 0 ? 'ring-2 ring-sky-300/50' : ''}`);
             const overlay = isSelected ? `<div class="absolute inset-0 bg-green-400/20 z-20 pointer-events-none rounded-lg"></div><div class="absolute -top-2 -right-2 bg-green-500 text-white rounded-full p-1 z-30 shadow-lg"><i data-lucide="check" class="w-3 h-3"></i></div>` : '';
-            const repBadge = reps > 0 && !isSelected ? `<div class="absolute -top-2 -right-2 bg-blue-500 text-white text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center border border-white shadow-lg z-20 pointer-events-none">+${reps}</div>` : '';
 
             return `
                 <div class="relative flex justify-center ${customClasses}">
                     <button type="button" ${onClickAttr ? `onclick="${onClickAttr}"` : ''} 
-                            class="relative w-full aspect-[3/4] rounded-xl flex items-center justify-center transition-all duration-300 select-none outline-none ${onClickAttr ? 'cursor-pointer touch-manipulation active:scale-95' : 'cursor-default'} ${borderClass} ${isMissing ? 'bg-white/10' : ''}"
+                            class="relative w-full ${isWide ? 'aspect-[7/4]' : 'aspect-[3/4]'} rounded-xl flex items-center justify-center transition-all duration-300 select-none outline-none ${onClickAttr ? 'cursor-pointer touch-manipulation active:scale-95' : 'cursor-default'} ${borderClass} ${isMissing ? 'bg-white/10' : ''}"
                             style="background-color: ${bgColor}">
                         <div class="absolute inset-0 rounded-xl overflow-hidden pointer-events-none">
                             ${maskColorsHtml}
+                            ${specialArt}
                         </div>
-                        <div class="absolute bottom-[2px] left-[2px] w-[35%] h-[35%] rounded-full flex items-center justify-center font-black text-xs shadow-md transition-all z-10 pointer-events-none ${isMissing ? 'bg-black/20 text-white/50 backdrop-blur-sm' : 'bg-white text-gray-900'}">${num}</div>
+                        ${getRepeatBadgeHtml(reps, true)}
+                        <div class="absolute bottom-[2px] left-[2px] w-[30%] h-[30%] rounded-full flex items-center justify-center font-black text-xs shadow-md transition-all z-10 pointer-events-none ${isMissing ? 'bg-black/20 text-white/50 backdrop-blur-sm' : 'bg-white text-gray-900'}">${num}</div>
                         ${iconBadge}
                         ${overlay}
                     </button>
-                    ${repBadge}
                 </div>
             `;
         }
@@ -996,8 +1126,10 @@
             const isHave = st >= 1;
             const reps = st > 1 ? st - 1 : 0;
             const bgColor = isHave ? details.colors[0] : '';
-            
-            const maskColorsHtml = isHave ? `
+            const isWide = num === 13 && details.code !== 'fifa' && details.code !== 'cc';
+            const specialArt = getSpecialStickerArt(team, num, isHave, false);
+
+            const maskColorsHtml = (!specialArt && isHave) ? `
                 <div class="absolute inset-0 transition-all duration-300 opacity-90 pointer-events-none"
                      style="background: radial-gradient(ellipse at 50% 50%, ${details.colors[2]} 0%, ${details.colors[2]} 30%, ${details.colors[1]} 31%, ${details.colors[1]} 100%);
                             mask-image: url('${LOGO_URL}'); -webkit-mask-image: url('${LOGO_URL}');
@@ -1005,11 +1137,11 @@
                             mask-position: center; -webkit-mask-position: center;
                             mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat;">
                 </div>
-            ` : `
+            ` : (!specialArt ? `
                 <div class="absolute inset-0 mix-blend-overlay opacity-30 pointer-events-none"
                      style="background-image: url('${LOGO_URL}'); background-size: 85%; background-position: center; background-repeat: no-repeat; filter: grayscale(100%) brightness(200%);">
                 </div>
-            `;
+            ` : '');
 
             let iconBadge = '';
             if(isHave && details.code !== 'fifa' && details.code !== 'cc') {
@@ -1022,16 +1154,17 @@
 
             return `
                 <button type="button" onclick="window.toggleSticker('${team}', ${num})" 
-                        class="relative w-full aspect-[3/4] max-w-[80px] rounded-xl flex items-center justify-center transition-all duration-300 select-none outline-none touch-manipulation cursor-pointer active:scale-95 ${isMissing ? 'bg-white/10 border border-white/20 active:bg-white/20 shadow-inner' : 'border-[2px] sm:border-[3px] border-white/90 shadow-[0_8px_15px_rgba(0,0,0,0.3)] sm:hover:-translate-y-1 sm:hover:scale-105'}"
+                        class="relative w-full ${isWide ? 'aspect-[7/4] max-w-none' : 'aspect-[3/4] max-w-[80px]'} rounded-xl flex items-center justify-center transition-all duration-300 select-none outline-none touch-manipulation cursor-pointer active:scale-95 ${isMissing ? 'bg-white/10 border border-white/20 active:bg-white/20 shadow-inner' : `border-[2px] sm:border-[3px] border-white/90 shadow-[0_8px_15px_rgba(0,0,0,0.3)] sm:hover:-translate-y-1 sm:hover:scale-105 ${reps > 0 ? 'ring-2 ring-sky-300/55' : ''}`}"
                         style="background-color: ${bgColor}">
                     <div class="absolute inset-0 rounded-xl overflow-hidden pointer-events-none">
                         ${maskColorsHtml}
+                        ${specialArt}
                     </div>
+                    ${getRepeatBadgeHtml(reps, false)}
                     <div class="absolute bottom-1 left-1 w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center font-black text-xs sm:text-sm shadow-md transition-all z-10 pointer-events-none ${isMissing ? 'bg-black/20 text-white/50 backdrop-blur-sm' : 'bg-white text-gray-900'}">${num}</div>
                     ${iconBadge}
                 </button>
-                ${isHave ? `<button type="button" onclick="window.clearSticker('${team}', ${num}, event)" title="Deseleccionar figurita" aria-label="Deseleccionar figurita" class="absolute -top-3 -right-2 sm:-right-3 bg-red-500 hover:bg-red-600 text-white w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center border-2 border-white shadow-lg z-30 active:scale-90 transition-all"><i data-lucide="x" class="w-3 h-3 sm:w-4 sm:h-4 pointer-events-none"></i></button>` : ''}
-                ${reps > 0 ? `<div class="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-500 text-white text-[10px] sm:text-xs font-black w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center border-2 border-white shadow-lg z-20 pointer-events-none">+${reps}</div>` : ''}
+                ${isHave ? `<button type="button" onclick="return window.clearSticker('${team}', ${num}, event)" title="Deseleccionar figurita" aria-label="Deseleccionar figurita" class="absolute -top-1.5 -right-1.5 bg-red-500 hover:bg-red-600 text-white w-4 h-4 sm:w-5 sm:h-5 rounded-full flex items-center justify-center border border-white shadow-lg z-30 active:scale-90 transition-all"><i data-lucide="x" class="w-2.5 h-2.5 sm:w-3 sm:h-3 pointer-events-none"></i></button>` : ''}
             `;
         }
 
@@ -1070,22 +1203,34 @@
 
                 let stickersHtml = Array.from({ length: count }).map((_, idx) => {
                     const num = idx + 1;
-                    return `<div id="sticker-wrap-${team}-${num}" class="relative flex justify-center">${getStickerInnerHtml(team, num)}</div>`;
+                    const wrapClass = num === 13 && details.code !== 'fifa' && details.code !== 'cc' ? 'relative flex justify-center col-span-2' : 'relative flex justify-center';
+                    return `<div id="sticker-wrap-${team}-${num}" class="${wrapClass}">${getStickerInnerHtml(team, num)}</div>`;
                 }).join('');
 
                 return `
                 <div id="team-section-${team}" class="bg-black/20 backdrop-blur-xl rounded-3xl overflow-hidden border border-white/20 shadow-xl scroll-smooth-offset">
-                    <div class="bg-gradient-to-r from-black/60 to-black/20 px-4 py-3 sm:px-5 sm:py-3 border-b border-white/10 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 backdrop-blur-md">
-                        <span class="font-bold text-base sm:text-lg tracking-wide flex items-center gap-3">
-                            ${flagHtml} ${details.name}
-                        </span>
-                        <div class="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
-                            <button id="team-complete-btn-${team}" type="button" onclick="window.markWholeTeam('${team}')" ${isComplete ? 'disabled' : ''} class="${isComplete ? 'flex items-center justify-center gap-1.5 text-[10px] sm:text-xs bg-green-500/25 text-green-200 border border-green-400/40 px-3 py-1.5 rounded-full font-bold shadow-sm whitespace-nowrap cursor-default' : 'flex items-center justify-center gap-1.5 text-[10px] sm:text-xs bg-white/15 hover:bg-green-500/30 text-white border border-white/25 hover:border-green-400/60 px-3 py-1.5 rounded-full font-bold shadow-sm whitespace-nowrap active:scale-95 transition-all cursor-pointer touch-manipulation'}">
-                                ${isComplete ? '<i data-lucide="check-circle-2" class="w-4 h-4 pointer-events-none"></i> Completo' : '<i data-lucide="check-square" class="w-4 h-4 pointer-events-none"></i> Marcar todas'}
-                            </button>
-                            <span id="team-count-${team}" class="text-xs bg-white/20 backdrop-blur-md border border-white/30 px-3 py-1.5 rounded-full font-bold shadow-sm whitespace-nowrap ml-2">
-                                ${haveCount} / ${count}
+                    <div class="bg-gradient-to-r from-black/60 to-black/20 px-4 py-3 sm:px-5 sm:py-3 border-b border-white/10 backdrop-blur-md">
+                        <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+                            <span class="font-bold text-base sm:text-lg tracking-wide flex items-center gap-3">
+                                ${flagHtml} ${details.name}
                             </span>
+                            <div class="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
+                                <button id="team-complete-btn-${team}" type="button" onclick="window.markWholeTeam('${team}')" ${isComplete ? 'disabled' : ''} class="${isComplete ? 'flex items-center justify-center gap-1.5 text-[10px] sm:text-xs bg-green-500/25 text-green-200 border border-green-400/40 px-3 py-1.5 rounded-full font-bold shadow-sm whitespace-nowrap cursor-default' : 'flex items-center justify-center gap-1.5 text-[10px] sm:text-xs bg-white/15 hover:bg-green-500/30 text-white border border-white/25 hover:border-green-400/60 px-3 py-1.5 rounded-full font-bold shadow-sm whitespace-nowrap active:scale-95 transition-all cursor-pointer touch-manipulation'}">
+                                    ${isComplete ? '<i data-lucide="check-circle-2" class="w-4 h-4 pointer-events-none"></i> Completo' : '<i data-lucide="check-square" class="w-4 h-4 pointer-events-none"></i> Marcar todas'}
+                                </button>
+                                <span id="team-count-${team}" class="text-xs bg-white/20 backdrop-blur-md border border-white/30 px-3 py-1.5 rounded-full font-bold shadow-sm whitespace-nowrap ml-2">
+                                    ${haveCount} / ${count}
+                                </span>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <div class="flex items-center justify-between text-[11px] text-white/60 mb-1.5">
+                                <span id="team-progress-text-${team}">${Math.round((haveCount / count) * 100)}% completo</span>
+                                <span>${count - haveCount} faltan</span>
+                            </div>
+                            <div class="team-progress-track w-full h-2 rounded-full overflow-hidden">
+                                <div id="team-progress-${team}" class="team-progress-fill bg-gradient-to-r from-emerald-400 to-lime-300 h-full rounded-full transition-all duration-700" style="width: ${Math.round((haveCount / count) * 100)}%"></div>
+                            </div>
                         </div>
                     </div>
                     <div class="p-3 sm:p-5 grid grid-cols-4 sm:grid-cols-5 md:grid-cols-10 gap-x-2 gap-y-4 sm:gap-4 pt-6">
@@ -1123,19 +1268,6 @@
 
                     <div id="progress-rankings" class="mb-4">
                         ${renderProgressRankings()}
-                    </div>
-
-                    <div class="mb-4 bg-black/20 border border-white/10 rounded-2xl p-3">
-                        <div class="flex flex-col sm:flex-row gap-2 sm:items-center">
-                            <button type="button" onclick="window.startVoiceMarking()" class="flex items-center justify-center gap-2 bg-pink-500/20 hover:bg-pink-500/40 text-pink-200 border border-pink-400/40 px-3 py-2.5 rounded-xl transition-all text-[11px] sm:text-xs uppercase font-bold active:scale-95 cursor-pointer touch-manipulation">
-                                <i data-lucide="mic" class="w-4 h-4 pointer-events-none"></i> Marcar por voz
-                            </button>
-                            <div class="flex flex-1 gap-2">
-                                <input id="voice-command-input" type="text" placeholder="También podés escribir: Argentina 1 2 3" class="flex-1 bg-black/30 border border-white/15 rounded-xl px-3 py-2 text-xs text-white placeholder-white/35 outline-none focus:ring-2 focus:ring-pink-400/60" onkeydown="if(event.key==='Enter'){window.applyTypedVoiceCommand();}">
-                                <button type="button" onclick="window.applyTypedVoiceCommand()" class="bg-white/10 hover:bg-white/20 border border-white/15 rounded-xl px-3 py-2 text-xs font-bold active:scale-95">OK</button>
-                            </div>
-                        </div>
-                        <p id="voice-status" class="text-white/55 text-xs mt-2 leading-relaxed">${state.voiceStatus}</p>
                     </div>
 
                     <!-- NUEVA BARRA DE ACCIONES (Imprimir / Cambio Manual / Borrar) -->
