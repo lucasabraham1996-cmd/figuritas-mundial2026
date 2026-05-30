@@ -1,6 +1,8 @@
 
 
 
+
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -70,6 +72,57 @@
         }
         .team-progress-fill {
             box-shadow: 0 0 12px rgba(74,222,128,0.35);
+        }
+
+        .country-side-nav {
+            position: fixed;
+            right: 8px;
+            top: 108px;
+            bottom: 92px;
+            z-index: 45;
+            width: 58px;
+            max-height: calc(100vh - 200px);
+            overflow-y: auto;
+            padding: 8px 6px;
+            border-radius: 18px;
+            background: rgba(0,0,0,0.34);
+            border: 1px solid rgba(255,255,255,0.16);
+            backdrop-filter: blur(16px);
+            box-shadow: 0 16px 38px rgba(0,0,0,0.28);
+        }
+        .country-side-nav::-webkit-scrollbar { width: 3px; }
+        .country-side-nav button {
+            width: 100%;
+            min-height: 36px;
+            margin-bottom: 7px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform .15s ease, background .15s ease, border-color .15s ease;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.07);
+        }
+        .country-side-nav button:hover { background: rgba(255,255,255,0.16); border-color: rgba(255,255,255,0.28); }
+        .country-side-nav button:active { transform: scale(.94); }
+        @media (min-width: 640px) {
+            .country-side-nav {
+                right: 14px;
+                top: 116px;
+                bottom: 110px;
+                width: 86px;
+                padding: 10px 8px;
+            }
+            .country-side-nav button {
+                min-height: 42px;
+                gap: 6px;
+                justify-content: flex-start;
+                padding: 0 7px;
+            }
+        }
+        @media (max-width: 480px) {
+            main.album-with-side-nav { padding-right: 4.7rem; }
+            .country-side-nav { right: 5px; width: 54px; }
         }
     </style>
 </head>
@@ -733,13 +786,58 @@
 
         // --- NAVEGACIÓN ---
         window.scrollToTeam = (team) => {
-            if(!team) return;
+            if(!team) return false;
             const el = document.getElementById(`team-section-${team}`);
-            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                return true;
+            }
+            return false;
+        };
+
+        window.handleCountryJump = (team, selectEl = null) => {
+            if(!team) return false;
+            const ok = window.scrollToTeam(team);
+            if(selectEl) {
+                selectEl.value = '';
+                selectEl.blur();
+            }
+            return ok;
         };
 
         window.scrollToTop = () => {
             window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        window.clearAllDuplicates = async () => {
+            if (!state.virtualUser || !state.firebaseUser) return;
+            const stats = calculateStats();
+            if (stats.duplicates === 0) {
+                alert('No tenés repetidas cargadas para eliminar.');
+                return;
+            }
+            const confirmClear = confirm(`Se eliminarán ${stats.duplicates} repetidas, pero las figuritas quedarán marcadas como obtenidas. ¿Continuar?`);
+            if (!confirmClear) return;
+
+            const previousAlbum = JSON.parse(JSON.stringify(state.albumData || {}));
+            const cleanAlbum = JSON.parse(JSON.stringify(state.albumData || {}));
+            Object.entries(cleanAlbum).forEach(([team, stickers]) => {
+                Object.keys(stickers || {}).forEach((num) => {
+                    if (stickers[num] > 1) stickers[num] = 1;
+                });
+            });
+
+            state.albumData = normalizeAlbum(cleanAlbum);
+            render();
+
+            try {
+                await saveAlbumData(state.albumData);
+            } catch (error) {
+                console.error('Error eliminando repetidas', error);
+                state.albumData = previousAlbum;
+                render();
+                alert('No se pudieron eliminar las repetidas. Revisá la conexión e intentalo nuevamente.');
+            }
         };
 
         window.markWholeTeam = async (team) => {
@@ -1234,13 +1332,33 @@
                     <i data-lucide="navigation" class="w-4 h-4 pointer-events-none"></i> Búsqueda Rápida:
                 </div>
                 <div class="relative w-full">
-                    <select onchange="window.scrollToTeam(this.value); this.value='';" class="w-full bg-black/40 border border-white/20 text-white font-bold rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-green-400 cursor-pointer text-sm appearance-none">
-                        <option value="" disabled selected>Selecciona un país del índice alfabético...</option>
+                    <select onchange="window.handleCountryJump(this.value, this)" class="w-full bg-black/40 border border-white/20 text-white font-bold rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-green-400 cursor-pointer text-sm appearance-none">
+                        <option value="" selected>Selecciona un país del índice alfabético...</option>
                         ${options}
                     </select>
                     <i data-lucide="chevron-down" class="absolute right-4 top-1/2 transform -translate-y-1/2 text-white/50 pointer-events-none w-4 h-4"></i>
                 </div>
             </div>
+            `;
+        }
+
+
+        function renderSideCountryNav() {
+            const items = TEAMS.map(team => {
+                const details = TEAM_DETAILS[team] || { name: team, code: 'un' };
+                const icon = getTeamFlagHtml(team, 'w-7 h-5 rounded-sm sm:w-8 sm:h-6');
+                return `
+                    <button type="button" onclick="window.handleCountryJump('${team}')" title="${details.name}" aria-label="Ir a ${details.name}" class="touch-manipulation cursor-pointer">
+                        <span class="pointer-events-none shrink-0">${icon}</span>
+                        <span class="hidden sm:inline text-[10px] font-black text-white/85 leading-none pointer-events-none">${team}</span>
+                    </button>
+                `;
+            }).join('');
+            return `
+                <nav class="country-side-nav fade-in" aria-label="Navegación rápida por países">
+                    <div class="text-[9px] sm:text-[10px] uppercase tracking-widest text-white/45 font-black text-center mb-2">Países</div>
+                    ${items}
+                </nav>
             `;
         }
 
@@ -1333,6 +1451,9 @@
                         </button>
                         <button type="button" onclick="window.openManualTradeModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-300 border border-emerald-500/40 px-3 py-2.5 rounded-xl transition-all text-[11px] sm:text-xs uppercase font-bold backdrop-blur-md active:scale-95 cursor-pointer touch-manipulation">
                             <i data-lucide="refresh-cw" class="w-4 h-4 pointer-events-none"></i> Cambios
+                        </button>
+                        <button type="button" onclick="window.clearAllDuplicates()" class="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-sky-500/20 hover:bg-sky-500/40 text-sky-200 border border-sky-400/40 px-3 py-2.5 rounded-xl transition-all text-[11px] sm:text-xs uppercase font-bold backdrop-blur-md active:scale-95 cursor-pointer touch-manipulation">
+                            <i data-lucide="eraser" class="w-4 h-4 pointer-events-none"></i> Eliminar repetidas
                         </button>
                         <button type="button" onclick="window.setShowClearConfirm(true)" class="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-red-500/10 hover:bg-red-500/30 text-red-300 border border-red-500/40 px-3 py-2.5 rounded-xl transition-all text-[11px] sm:text-xs uppercase font-bold backdrop-blur-md active:scale-95 cursor-pointer touch-manipulation">
                             <i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i> Borrar
@@ -1625,11 +1746,12 @@
             </div>
 
             <!-- CONTENIDO PRINCIPAL -->
-            <main class="p-4 max-w-4xl mx-auto bg-white/10 backdrop-blur-md border border-white/20 rounded-b-3xl rounded-tr-3xl shadow-2xl min-h-[70vh]">
+            <main class="p-4 max-w-4xl mx-auto bg-white/10 backdrop-blur-md border border-white/20 rounded-b-3xl rounded-tr-3xl shadow-2xl min-h-[70vh] ${state.currentTab === 'album' ? 'album-with-side-nav' : ''}">
                 ${state.currentTab === 'album' ? renderAlbum() : state.currentTab === 'trade' ? renderTradeDraft() : state.currentTab === 'notifications' ? renderNotifications() : renderMarket()}
             </main>
 
             ${state.currentTab === 'album' ? `
+            ${renderSideCountryNav()}
             <button type="button" onclick="window.scrollToTop()" class="fixed bottom-5 right-4 sm:right-6 z-40 flex items-center gap-2 bg-white text-gray-900 hover:bg-green-100 border border-white/70 px-4 py-3 rounded-full font-black text-xs sm:text-sm shadow-2xl active:scale-95 transition-all touch-manipulation cursor-pointer">
                 <i data-lucide="arrow-up" class="w-4 h-4 pointer-events-none"></i> Ir arriba
             </button>` : ''}
