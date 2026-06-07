@@ -3,6 +3,8 @@
 
 
 
+
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -15,6 +17,8 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <!-- html2canvas para descargar imagenes -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- OCR para escanear figuritas desde fotos -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
         /* Animaciones personalizadas */
         .animate-blob { animation: blob 7s infinite; }
@@ -238,14 +242,366 @@
             showClearConfirm: false,
             showPrintModal: false,
             showManualTradeModal: false,
+            showSettingsModal: false,
+            showScannerModal: false,
+            showUsefulCheckModal: false,
             isRepetidasMode: false, // MODO: SOLO TILDAR REPETIDAS
             voiceStatus: 'Listo para escuchar. Ej: Argentina 1 2 3, Brasil 10 al 15, o borrar México 5.',
+            scanStatus: 'Pegá un texto o subí una foto. Ej: ARG 20, Argentina 20, Brasil 1 al 5.',
+            scanDraftText: '',
+            scanResults: [],
+            usefulStatus: 'Pegá o escaneá la lista que te pasaron y te digo cuáles te sirven.',
+            usefulResults: null,
             selectedMarketUser: null,
             tradeDraft: null, // { toUser, request: [], offer: [] }
             manualTradeDraft: { given: [], received: [] },
             manualTradeForm: { givenTeam: TEAMS[0], recTeam: TEAMS[0] }
         };
         window.state = state;
+
+
+        const SESSION_KEY = 'album_2026_active_virtual_user';
+        const BIOMETRIC_PREFIX = 'album_2026_biometric_';
+        let restoreAttempted = false;
+
+        function persistSession() {
+            if (!state.virtualUser) return;
+            try { localStorage.setItem(SESSION_KEY, JSON.stringify(state.virtualUser)); } catch(e) {}
+        }
+
+        function clearPersistedSession() {
+            try { localStorage.removeItem(SESSION_KEY); } catch(e) {}
+        }
+
+        async function restoreSessionIfPossible() {
+            if (restoreAttempted || state.virtualUser || !state.allUsersData.length) return;
+            restoreAttempted = true;
+            try {
+                const saved = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+                if (!saved || !saved.id) return;
+                const myData = state.allUsersData.find(u => u.id === saved.id);
+                if (!myData) return clearPersistedSession();
+                state.virtualUser = { id: myData.id, fullName: myData.fullName };
+                state.albumData = await applyOneTimeAlbumCorrections(myData.id, myData.album || {});
+                state.currentTab = state.currentTab || 'album';
+                render();
+            } catch(e) { clearPersistedSession(); }
+        }
+
+        function arrayBufferToBase64(buffer) {
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            bytes.forEach(b => binary += String.fromCharCode(b));
+            return btoa(binary);
+        }
+
+        function base64ToArrayBuffer(base64) {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            return bytes.buffer;
+        }
+
+        function randomChallenge(length = 32) {
+            const arr = new Uint8Array(length);
+            crypto.getRandomValues(arr);
+            return arr;
+        }
+
+        function getBiometricRecord(userId) {
+            try { return JSON.parse(localStorage.getItem(BIOMETRIC_PREFIX + userId) || 'null'); }
+            catch(e) { return null; }
+        }
+
+        function hasBiometricForUser(userId) {
+            return !!(window.PublicKeyCredential && getBiometricRecord(userId)?.credentialId);
+        }
+
+        window.openSettingsModal = () => { state.showSettingsModal = true; renderModalOnly(); };
+        window.closeSettingsModal = () => { state.showSettingsModal = false; renderModalOnly(); };
+        window.openScannerModal = () => { state.showScannerModal = true; state.scanStatus = 'Pegá un texto o subí una foto. Ej: ARG 20, Argentina 20, Brasil 1 al 5.'; state.scanResults = []; renderModalOnly(); };
+        window.closeScannerModal = () => { state.showScannerModal = false; renderModalOnly(); };
+        window.openUsefulCheckModal = () => { state.showUsefulCheckModal = true; state.usefulResults = null; state.usefulStatus = 'Pegá o escaneá la lista que te pasaron y te digo cuáles te sirven.'; renderModalOnly(); };
+        window.closeUsefulCheckModal = () => { state.showUsefulCheckModal = false; renderModalOnly(); };
+
+        window.changeMyPin = async () => {
+            if (!state.virtualUser || !state.firebaseUser) return;
+            const current = document.getElementById('current-pin')?.value || '';
+            const next = document.getElementById('new-pin')?.value || '';
+            const repeat = document.getElementById('repeat-new-pin')?.value || '';
+            if (!/^\d{4}$/.test(current) || !/^\d{4}$/.test(next)) return alert('El PIN actual y el nuevo deben tener 4 números.');
+            if (next !== repeat) return alert('El PIN nuevo no coincide.');
+            const userRef = doc(db, 'artifacts', projectId, 'public', 'data', 'sticker_users', state.virtualUser.id);
+            const snap = await getDoc(userRef);
+            if (!snap.exists() || snap.data().pin !== current) return alert('El PIN actual no es correcto.');
+            await updateDoc(userRef, { pin: next, pinUpdatedAt: new Date().toISOString() });
+            alert('Contraseña/PIN actualizado correctamente.');
+            state.showSettingsModal = false;
+            renderModalOnly();
+        };
+
+        window.enableBiometricLogin = async () => {
+            if (!state.virtualUser) return;
+            if (!window.PublicKeyCredential || !navigator.credentials) {
+                alert('Este navegador no permite huella/rostro con WebAuthn. Probá desde Chrome, Edge o Safari actualizado.');
+                return;
+            }
+            try {
+                const userIdBytes = new TextEncoder().encode(state.virtualUser.id).slice(0, 64);
+                const credential = await navigator.credentials.create({
+                    publicKey: {
+                        challenge: randomChallenge(),
+                        rp: { name: 'Álbum Mundial 2026' },
+                        user: { id: userIdBytes, name: state.virtualUser.fullName, displayName: state.virtualUser.fullName },
+                        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+                        authenticatorSelection: { userVerification: 'required', residentKey: 'preferred' },
+                        timeout: 60000,
+                        attestation: 'none'
+                    }
+                });
+                const record = {
+                    userId: state.virtualUser.id,
+                    credentialId: arrayBufferToBase64(credential.rawId),
+                    enabledAt: new Date().toISOString()
+                };
+                localStorage.setItem(BIOMETRIC_PREFIX + state.virtualUser.id, JSON.stringify(record));
+                const userRef = doc(db, 'artifacts', projectId, 'public', 'data', 'sticker_users', state.virtualUser.id);
+                await updateDoc(userRef, { biometricEnabled: true, biometricUpdatedAt: new Date().toISOString() });
+                alert('Acceso con rostro/huella activado en este dispositivo.');
+                renderModalOnly();
+            } catch (error) {
+                console.error(error);
+                alert('No se pudo activar el acceso biométrico. Verificá que el dispositivo tenga huella/rostro configurado.');
+            }
+        };
+
+        window.disableBiometricLogin = async () => {
+            if (!state.virtualUser) return;
+            localStorage.removeItem(BIOMETRIC_PREFIX + state.virtualUser.id);
+            try {
+                const userRef = doc(db, 'artifacts', projectId, 'public', 'data', 'sticker_users', state.virtualUser.id);
+                await updateDoc(userRef, { biometricEnabled: false, biometricUpdatedAt: new Date().toISOString() });
+            } catch(e) {}
+            alert('Acceso biométrico desactivado en este dispositivo.');
+            renderModalOnly();
+        };
+
+        window.loginWithBiometric = async () => {
+            const selectElement = document.getElementById('loginSelect');
+            const userId = selectElement?.value;
+            if (!userId) return alert('Seleccioná primero tu usuario.');
+            const record = getBiometricRecord(userId);
+            if (!record?.credentialId) return alert('Este usuario todavía no tiene huella/rostro activado en este dispositivo. Entrá con PIN y activalo desde Ajustes.');
+            try {
+                await navigator.credentials.get({
+                    publicKey: {
+                        challenge: randomChallenge(),
+                        allowCredentials: [{ type: 'public-key', id: base64ToArrayBuffer(record.credentialId) }],
+                        userVerification: 'required',
+                        timeout: 60000
+                    }
+                });
+                const userRef = doc(db, 'artifacts', projectId, 'public', 'data', 'sticker_users', userId);
+                const snap = await getDoc(userRef);
+                if (!snap.exists()) return alert('No encontré ese usuario.');
+                const data = snap.data();
+                state.virtualUser = { id: userId, fullName: data.fullName };
+                state.albumData = data.album || {};
+                persistSession();
+                render();
+            } catch (error) {
+                console.error(error);
+                alert('No se pudo validar el rostro/huella.');
+            }
+        };
+
+        function buildTeamAliases() {
+            const aliases = [];
+            TEAMS.forEach(team => {
+                const details = TEAM_DETAILS[team] || { name: team };
+                const add = (alias) => aliases.push({ team, alias: normalizeVoiceText(alias), tokens: normalizeVoiceText(alias).split(' ') });
+                add(team); add(details.name);
+                if(team === 'FWC') ['fifa','especiales','especiales fifa'].forEach(add);
+                if(team === 'CC') ['coca cola','coca'].forEach(add);
+                if(team === 'RSA') add('sudafrica');
+                if(team === 'KOR') ['corea','corea sur','corea del sur'].forEach(add);
+                if(team === 'CZE') ['checa','republica checa'].forEach(add);
+                if(team === 'BIH') add('bosnia');
+                if(team === 'USA') ['estados unidos','eeuu','usa'].forEach(add);
+                if(team === 'NED') ['paises bajos','holanda'].forEach(add);
+                if(team === 'KSA') ['arabia','arabia saudita'].forEach(add);
+                if(team === 'COD') ['congo','rd congo','r d congo'].forEach(add);
+            });
+            aliases.sort((a,b) => b.tokens.length - a.tokens.length || b.alias.length - a.alias.length);
+            return aliases;
+        }
+
+        function aliasAt(tokens, index, aliases) {
+            for (const item of aliases) {
+                if (item.tokens.every((t, offset) => tokens[index + offset] === t)) return item;
+            }
+            return null;
+        }
+
+        function parseStickerReferences(text) {
+            const aliases = buildTeamAliases();
+            const normalized = normalizeVoiceText(text).replace(/([a-z])(?=\d)/g, '$1 ').replace(/(\d)(?=[a-z])/g, '$1 ');
+            const tokens = normalized.split(' ').filter(Boolean);
+            const results = [];
+            let i = 0;
+            while (i < tokens.length) {
+                const hit = aliasAt(tokens, i, aliases);
+                if (!hit) { i++; continue; }
+                const team = hit.team;
+                const max = getStickerCount(team);
+                i += hit.tokens.length;
+                const numbers = [];
+                while (i < tokens.length) {
+                    if (aliasAt(tokens, i, aliases)) break;
+                    const token = tokens[i];
+                    if (/^\d{1,2}$/.test(token)) {
+                        const start = parseInt(token);
+                        const connector = tokens[i + 1];
+                        const endToken = tokens[i + 2];
+                        if (['al','a','hasta'].includes(connector) && /^\d{1,2}$/.test(endToken || '')) {
+                            const end = parseInt(endToken);
+                            const low = Math.min(start, end), high = Math.max(start, end);
+                            for (let n = low; n <= high; n++) if (n >= 1 && n <= max && !numbers.includes(n)) numbers.push(n);
+                            i += 3;
+                            continue;
+                        }
+                        if (start >= 1 && start <= max && !numbers.includes(start)) numbers.push(start);
+                    }
+                    i++;
+                }
+                numbers.forEach(num => {
+                    if (!results.some(r => r.team === team && r.num === num)) results.push({ team, num });
+                });
+            }
+            return results.sort((a,b) => (TEAM_DETAILS[a.team]?.name || a.team).localeCompare(TEAM_DETAILS[b.team]?.name || b.team) || a.num - b.num);
+        }
+
+        async function readOcrFromFile(file, statusSetter) {
+            if (!file) return '';
+            if (!window.Tesseract) throw new Error('OCR no disponible');
+            statusSetter('Escaneando imagen... puede tardar unos segundos según la foto.');
+            const result = await Tesseract.recognize(file, 'eng+spa');
+            return result?.data?.text || '';
+        }
+
+        function formatParsedList(items) {
+            if (!items.length) return '<p class="text-white/50 text-sm text-center py-3">No encontré figuritas válidas.</p>';
+            return items.map(item => `<span class="inline-flex items-center gap-1 bg-white/10 border border-white/15 rounded-full px-3 py-1 text-xs font-bold mr-1 mb-2">${TEAM_DETAILS[item.team]?.name || item.team} ${item.num}</span>`).join('');
+        }
+
+        window.previewScannerText = () => {
+            const text = document.getElementById('scan-text-input')?.value || '';
+            const parsed = parseStickerReferences(text);
+            state.scanResults = parsed;
+            state.scanStatus = parsed.length ? `Encontré ${parsed.length} figurita(s). Revisá y confirmá para marcarlas.` : 'No encontré figuritas válidas. Probá con formato ARG 20 o Argentina 20.';
+            renderModalOnly();
+        };
+
+        window.scanStickerPhoto = async (inputId = 'scan-photo-input') => {
+            const file = document.getElementById(inputId)?.files?.[0];
+            if (!file) return alert('Elegí una foto o abrí la cámara primero.');
+            try {
+                const text = await readOcrFromFile(file, (msg) => { state.scanStatus = msg; renderModalOnly(); });
+                const input = document.getElementById('scan-text-input');
+                if (input) input.value = text;
+                const parsed = parseStickerReferences(text);
+                state.scanResults = parsed;
+                state.scanStatus = parsed.length ? `Escaneo listo: encontré ${parsed.length} figurita(s).` : 'Escaneé la imagen, pero no encontré códigos claros. Podés corregir el texto manualmente.';
+                renderModalOnly();
+            } catch (error) {
+                console.error(error);
+                state.scanStatus = 'No pude escanear la imagen. Probá con una foto más clara o pegá el texto.';
+                renderModalOnly();
+            } finally {
+                const picker = document.getElementById(inputId);
+                if (picker) picker.value = '';
+            }
+        };
+
+        window.openStickerCamera = () => document.getElementById('scan-camera-input')?.click();
+        window.openStickerGallery = () => document.getElementById('scan-photo-input')?.click();
+
+        window.confirmScannedStickers = async () => {
+            if (!state.scanResults.length) return alert('Primero detectá figuritas desde texto o foto.');
+            const previousAlbum = JSON.parse(JSON.stringify(state.albumData || {}));
+            state.scanResults.forEach(item => {
+                if (!state.albumData[item.team]) state.albumData[item.team] = {};
+                state.albumData[item.team][item.num] = Math.max(state.albumData[item.team][item.num] || 0, 1);
+            });
+            try {
+                await saveAlbumData();
+                state.showScannerModal = false;
+                render();
+            } catch (error) {
+                state.albumData = previousAlbum;
+                alert('No pude guardar las figuritas. Revisá la conexión.');
+            }
+        };
+
+        function buildUsefulResults(items) {
+            const useful = [], already = [];
+            items.forEach(item => {
+                const st = (state.albumData && state.albumData[item.team] && state.albumData[item.team][item.num]) || 0;
+                if (st === 0) useful.push(item);
+                else already.push(item);
+            });
+            return { total: items.length, useful, already };
+        }
+
+        window.previewUsefulText = () => {
+            const text = document.getElementById('useful-text-input')?.value || '';
+            const parsed = parseStickerReferences(text);
+            state.usefulResults = buildUsefulResults(parsed);
+            state.usefulStatus = parsed.length ? `Comprobé ${parsed.length} figurita(s).` : 'No encontré figuritas válidas para comprobar.';
+            renderModalOnly();
+        };
+
+        window.scanUsefulPhoto = async (inputId = 'useful-photo-input') => {
+            const file = document.getElementById(inputId)?.files?.[0];
+            if (!file) return alert('Elegí una foto o abrí la cámara primero.');
+            try {
+                const text = await readOcrFromFile(file, (msg) => { state.usefulStatus = msg; renderModalOnly(); });
+                const input = document.getElementById('useful-text-input');
+                if (input) input.value = text;
+                const parsed = parseStickerReferences(text);
+                state.usefulResults = buildUsefulResults(parsed);
+                state.usefulStatus = parsed.length ? `Listo: comprobé ${parsed.length} figurita(s).` : 'Escaneé la imagen, pero no encontré códigos claros. Podés corregir el texto manualmente.';
+                renderModalOnly();
+            } catch (error) {
+                console.error(error);
+                state.usefulStatus = 'No pude escanear la imagen. Probá con una foto más clara o pegá el texto.';
+                renderModalOnly();
+            } finally {
+                const picker = document.getElementById(inputId);
+                if (picker) picker.value = '';
+            }
+        };
+
+        window.openUsefulCamera = () => document.getElementById('useful-camera-input')?.click();
+        window.openUsefulGallery = () => document.getElementById('useful-photo-input')?.click();
+
+        window.markUsefulResults = async () => {
+            const useful = state.usefulResults?.useful || [];
+            if (!useful.length) return;
+            const previousAlbum = JSON.parse(JSON.stringify(state.albumData || {}));
+            useful.forEach(item => {
+                if (!state.albumData[item.team]) state.albumData[item.team] = {};
+                state.albumData[item.team][item.num] = 1;
+            });
+            try {
+                await saveAlbumData();
+                state.showUsefulCheckModal = false;
+                render();
+            } catch(error) {
+                state.albumData = previousAlbum;
+                alert('No pude guardar las figuritas útiles. Revisá la conexión.');
+            }
+        };
 
         // Función segura para cargar iconos
         function loadIconsSafely() {
@@ -313,6 +669,7 @@
                 }
                 
                 if(state.allUsersData.length === 0) state.isNewUserMode = true;
+                restoreSessionIfPossible();
                 
                 if (state.currentTab !== 'album') render(); 
                 else if(document.getElementById('stat-percent')) updateGlobalStatsOnly(); 
@@ -367,6 +724,7 @@
                     if (data.pin === pin) {
                         state.virtualUser = { id: userId, fullName: data.fullName };
                         state.albumData = data.album || {};
+                        persistSession();
                     } else alert("PIN incorrecto.");
                 } else {
                     if (!state.isNewUserMode) alert("El usuario ya no existe.");
@@ -375,6 +733,7 @@
                         await setDoc(userRef, newUser);
                         state.virtualUser = { id: userId, fullName };
                         state.albumData = {};
+                        persistSession();
                     }
                 }
             } catch (error) { state.dbError = "Error guardando datos: " + error.message; }
@@ -382,6 +741,7 @@
         };
 
         window.handleLogout = () => {
+            clearPersistedSession();
             state.virtualUser = null;
             state.albumData = {};
             state.currentTab = 'album';
@@ -1446,6 +1806,12 @@
 
                     <!-- NUEVA BARRA DE ACCIONES (Imprimir / Cambio Manual / Borrar) -->
                     <div class="w-full mt-2 flex flex-wrap sm:flex-nowrap justify-end gap-2 border-t border-white/10 pt-4">
+                        <button type="button" onclick="window.openScannerModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-lime-500/20 hover:bg-lime-500/40 text-lime-200 border border-lime-400/40 px-3 py-2.5 rounded-xl transition-all text-[11px] sm:text-xs uppercase font-bold backdrop-blur-md active:scale-95 cursor-pointer touch-manipulation">
+                            <i data-lucide="scan-line" class="w-4 h-4 pointer-events-none"></i> Escanear
+                        </button>
+                        <button type="button" onclick="window.openUsefulCheckModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-amber-500/20 hover:bg-amber-500/40 text-amber-200 border border-amber-400/40 px-3 py-2.5 rounded-xl transition-all text-[11px] sm:text-xs uppercase font-bold backdrop-blur-md active:scale-95 cursor-pointer touch-manipulation">
+                            <i data-lucide="search-check" class="w-4 h-4 pointer-events-none"></i> Comprobar
+                        </button>
                         <button type="button" onclick="window.openPrintModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 border border-indigo-500/40 px-3 py-2.5 rounded-xl transition-all text-[11px] sm:text-xs uppercase font-bold backdrop-blur-md active:scale-95 cursor-pointer touch-manipulation">
                             <i data-lucide="download" class="w-4 h-4 pointer-events-none"></i> Descargar
                         </button>
@@ -1729,6 +2095,9 @@
                         <i data-lucide="bell" class="w-5 h-5 pointer-events-none"></i>
                         ${pendingCount > 0 ? `<span class="absolute top-[2px] right-[2px] bg-red-500 w-3 h-3 rounded-full border border-black shadow-md pointer-events-none"></span>` : ''}
                     </button>
+                    <button type="button" onclick="window.openSettingsModal()" class="text-white p-2 rounded-full hover:bg-white/10 active:scale-95 transition border border-transparent hover:border-white/20 backdrop-blur-md touch-manipulation cursor-pointer" title="Ajustes">
+                        <i data-lucide="settings" class="w-5 h-5 pointer-events-none"></i>
+                    </button>
                     <button type="button" onclick="window.handleLogout()" class="text-red-300 hover:text-white p-2 rounded-full hover:bg-red-500/30 active:scale-95 transition border border-transparent hover:border-red-400/50 backdrop-blur-md touch-manipulation cursor-pointer">
                         <i data-lucide="log-out" class="w-5 h-5 pointer-events-none"></i>
                     </button>
@@ -1817,6 +2186,7 @@
                         <button type="submit" ${state.loading ? 'disabled' : ''} class="w-full bg-white/20 hover:bg-white/30 text-white border border-white/40 font-bold py-3 rounded-xl transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex justify-center items-center shadow-lg hover:shadow-xl backdrop-blur-md mt-2">
                             ${state.loading ? '<div class="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>' : (state.isNewUserMode ? "Crear y Entrar" : "Ingresar")}
                         </button>
+                        ${!state.isNewUserMode ? `<button type="button" onclick="window.loginWithBiometric()" class="w-full bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-100 border border-emerald-400/40 font-bold py-3 rounded-xl transition-all cursor-pointer flex justify-center items-center gap-2 shadow-lg backdrop-blur-md"><i data-lucide="fingerprint" class="w-5 h-5 pointer-events-none"></i> Entrar con rostro o huella</button>` : ''}
                     </form>
                 </div>
             </div>`;
@@ -1934,6 +2304,107 @@
                         </div>
                     </div>
                 </div>`;
+
+            } else if(state.showSettingsModal) {
+                const bioActive = state.virtualUser && hasBiometricForUser(state.virtualUser.id);
+                modalContainer.innerHTML = `
+                <div class="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md fade-in overflow-y-auto">
+                    <div class="bg-gradient-to-br from-gray-900 to-black border border-white/20 p-6 rounded-3xl shadow-2xl max-w-lg w-full pointer-events-auto my-auto">
+                        <h3 class="text-2xl font-black text-white mb-2 flex items-center gap-2"><i data-lucide="settings" class="w-6 h-6 text-sky-300 pointer-events-none"></i> Ajustes de cuenta</h3>
+                        <p class="text-white/60 text-sm mb-5">Cambiá tu PIN y activá el ingreso con rostro o huella en este dispositivo.</p>
+                        <div class="bg-white/5 border border-white/10 rounded-2xl p-4 mb-4">
+                            <h4 class="font-black text-sm uppercase tracking-widest text-white/80 mb-3">Cambiar contraseña/PIN</h4>
+                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                <input id="current-pin" type="password" maxlength="4" inputmode="numeric" placeholder="PIN actual" oninput="this.value=this.value.replace(/\D/g,'')" class="bg-black/40 border border-white/15 rounded-xl px-3 py-3 text-white text-center outline-none focus:ring-2 focus:ring-sky-400" />
+                                <input id="new-pin" type="password" maxlength="4" inputmode="numeric" placeholder="Nuevo PIN" oninput="this.value=this.value.replace(/\D/g,'')" class="bg-black/40 border border-white/15 rounded-xl px-3 py-3 text-white text-center outline-none focus:ring-2 focus:ring-sky-400" />
+                                <input id="repeat-new-pin" type="password" maxlength="4" inputmode="numeric" placeholder="Repetir" oninput="this.value=this.value.replace(/\D/g,'')" class="bg-black/40 border border-white/15 rounded-xl px-3 py-3 text-white text-center outline-none focus:ring-2 focus:ring-sky-400" />
+                            </div>
+                            <button onclick="window.changeMyPin()" class="mt-3 w-full py-3 rounded-xl font-bold text-white bg-sky-600 hover:bg-sky-700 active:scale-95 transition-all">Actualizar PIN</button>
+                        </div>
+                        <div class="bg-emerald-500/10 border border-emerald-400/25 rounded-2xl p-4 mb-5">
+                            <h4 class="font-black text-sm uppercase tracking-widest text-emerald-200 mb-2 flex items-center gap-2"><i data-lucide="fingerprint" class="w-4 h-4"></i> Rostro / huella</h4>
+                            <p class="text-white/60 text-sm mb-3">Usa la seguridad biométrica del celular o la PC. El navegador decide si valida con cara, huella o PIN del dispositivo.</p>
+                            <div class="flex gap-2">
+                                <button onclick="window.enableBiometricLogin()" class="flex-1 py-3 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition-all">${bioActive ? 'Reactivar' : 'Activar'}</button>
+                                <button onclick="window.disableBiometricLogin()" class="flex-1 py-3 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 active:scale-95 border border-white/10 transition-all" ${bioActive ? '' : 'disabled'}>Desactivar</button>
+                            </div>
+                            <p class="text-xs ${bioActive ? 'text-emerald-300' : 'text-white/45'} mt-2">Estado: ${bioActive ? 'activo en este dispositivo' : 'sin activar en este dispositivo'}.</p>
+                        </div>
+                        <button onclick="window.closeSettingsModal()" class="w-full py-3 rounded-xl font-bold text-white/80 hover:text-white bg-white/10 hover:bg-white/20 transition-all">Cerrar</button>
+                    </div>
+                </div>`;
+            } else if(state.showScannerModal) {
+                modalContainer.innerHTML = `
+                <div class="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md fade-in overflow-y-auto">
+                    <div class="bg-gradient-to-br from-gray-900 to-black border border-white/20 p-6 rounded-3xl shadow-2xl max-w-2xl w-full pointer-events-auto my-auto max-h-[90vh] overflow-y-auto">
+                        <h3 class="text-2xl font-black text-white mb-2 flex items-center gap-2"><i data-lucide="scan-line" class="w-6 h-6 text-lime-300 pointer-events-none"></i> Escanear o cargar figuritas</h3>
+                        <p class="text-white/60 text-sm mb-5">Subí una foto donde se lean códigos como ARG 20 o pegá la lista escrita. Luego confirmás y se marcan en tu álbum.</p>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                            <div class="bg-white/5 border border-white/10 rounded-2xl p-4">
+                                <label class="block text-xs font-black uppercase tracking-widest text-white/60 mb-2">Foto</label>
+                                <input id="scan-camera-input" type="file" accept="image/*" capture="environment" onchange="window.scanStickerPhoto('scan-camera-input')" class="hidden" />
+                                <input id="scan-photo-input" type="file" accept="image/*" onchange="window.scanStickerPhoto('scan-photo-input')" class="hidden" />
+                                <div class="grid grid-cols-1 gap-2">
+                                    <button onclick="window.openStickerCamera()" class="w-full py-3 rounded-xl font-bold text-white bg-lime-600 hover:bg-lime-700 active:scale-95 transition-all flex items-center justify-center gap-2"><i data-lucide="camera" class="w-4 h-4 pointer-events-none"></i> Abrir cámara</button>
+                                    <button onclick="window.openStickerGallery()" class="w-full py-3 rounded-xl font-bold text-lime-100 bg-lime-500/15 hover:bg-lime-500/25 border border-lime-300/20 active:scale-95 transition-all flex items-center justify-center gap-2"><i data-lucide="image" class="w-4 h-4 pointer-events-none"></i> Subir desde galería</button>
+                                </div>
+                                <p class="text-[11px] text-white/45 mt-3 leading-relaxed">En celular, la cámara se abre directo. En PC puede abrir el selector de archivos según el navegador.</p>
+                            </div>
+                            <div class="bg-white/5 border border-white/10 rounded-2xl p-4">
+                                <label class="block text-xs font-black uppercase tracking-widest text-white/60 mb-2">Texto</label>
+                                <textarea id="scan-text-input" rows="5" placeholder="Ej: ARG 20, Argentina 2 5 8, Brasil 1 al 5" class="w-full bg-black/40 border border-white/15 rounded-xl px-3 py-3 text-white outline-none focus:ring-2 focus:ring-lime-400 resize-none"></textarea>
+                                <button onclick="window.previewScannerText()" class="mt-3 w-full py-3 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 border border-white/10 active:scale-95 transition-all">Detectar desde texto</button>
+                            </div>
+                        </div>
+                        <div class="bg-black/30 border border-white/10 rounded-2xl p-4 mb-4">
+                            <p class="text-sm text-lime-200 mb-3">${state.scanStatus}</p>
+                            <div>${formatParsedList(state.scanResults)}</div>
+                        </div>
+                        <div class="flex gap-3">
+                            <button onclick="window.closeScannerModal()" class="flex-1 py-3 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 active:scale-95 border border-white/10 transition-all">Cancelar</button>
+                            <button onclick="window.confirmScannedStickers()" class="flex-1 py-3 rounded-xl font-bold text-white bg-lime-600 hover:bg-lime-700 active:scale-95 transition-all">Marcar detectadas</button>
+                        </div>
+                    </div>
+                </div>`;
+            } else if(state.showUsefulCheckModal) {
+                const res = state.usefulResults;
+                modalContainer.innerHTML = `
+                <div class="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md fade-in overflow-y-auto">
+                    <div class="bg-gradient-to-br from-gray-900 to-black border border-white/20 p-6 rounded-3xl shadow-2xl max-w-2xl w-full pointer-events-auto my-auto max-h-[90vh] overflow-y-auto">
+                        <h3 class="text-2xl font-black text-white mb-2 flex items-center gap-2"><i data-lucide="search-check" class="w-6 h-6 text-amber-300 pointer-events-none"></i> Comprobar cuáles me sirven</h3>
+                        <p class="text-white/60 text-sm mb-5">Pegá o escaneá lo que te pasaron. La app te separa las que te faltan de las que ya tenés.</p>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                            <div class="bg-white/5 border border-white/10 rounded-2xl p-4">
+                                <label class="block text-xs font-black uppercase tracking-widest text-white/60 mb-2">Foto o captura</label>
+                                <input id="useful-camera-input" type="file" accept="image/*" capture="environment" onchange="window.scanUsefulPhoto('useful-camera-input')" class="hidden" />
+                                <input id="useful-photo-input" type="file" accept="image/*" onchange="window.scanUsefulPhoto('useful-photo-input')" class="hidden" />
+                                <div class="grid grid-cols-1 gap-2">
+                                    <button onclick="window.openUsefulCamera()" class="w-full py-3 rounded-xl font-bold text-white bg-amber-600 hover:bg-amber-700 active:scale-95 transition-all flex items-center justify-center gap-2"><i data-lucide="camera" class="w-4 h-4 pointer-events-none"></i> Abrir cámara</button>
+                                    <button onclick="window.openUsefulGallery()" class="w-full py-3 rounded-xl font-bold text-amber-100 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-300/20 active:scale-95 transition-all flex items-center justify-center gap-2"><i data-lucide="image" class="w-4 h-4 pointer-events-none"></i> Subir desde galería</button>
+                                </div>
+                                <p class="text-[11px] text-white/45 mt-3 leading-relaxed">Podés sacar la foto en el momento o cargar una captura que te hayan mandado.</p>
+                            </div>
+                            <div class="bg-white/5 border border-white/10 rounded-2xl p-4">
+                                <label class="block text-xs font-black uppercase tracking-widest text-white/60 mb-2">Texto</label>
+                                <textarea id="useful-text-input" rows="5" placeholder="Ej: ARG 20, MEX 3, Brasil 1 2 3" class="w-full bg-black/40 border border-white/15 rounded-xl px-3 py-3 text-white outline-none focus:ring-2 focus:ring-amber-400 resize-none"></textarea>
+                                <button onclick="window.previewUsefulText()" class="mt-3 w-full py-3 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 border border-white/10 active:scale-95 transition-all">Comprobar texto</button>
+                            </div>
+                        </div>
+                        <div class="bg-black/30 border border-white/10 rounded-2xl p-4 mb-4">
+                            <p class="text-sm text-amber-200 mb-3">${state.usefulStatus}</p>
+                            ${res ? `
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div class="bg-green-500/10 border border-green-400/20 rounded-xl p-3"><h4 class="font-black text-green-300 text-sm mb-2">Me sirven (${res.useful.length})</h4>${formatParsedList(res.useful)}</div>
+                                    <div class="bg-white/5 border border-white/10 rounded-xl p-3"><h4 class="font-black text-white/60 text-sm mb-2">Ya las tengo (${res.already.length})</h4>${formatParsedList(res.already)}</div>
+                                </div>` : ''}
+                        </div>
+                        <div class="flex gap-3">
+                            <button onclick="window.closeUsefulCheckModal()" class="flex-1 py-3 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 active:scale-95 border border-white/10 transition-all">Cerrar</button>
+                            <button onclick="window.markUsefulResults()" class="flex-1 py-3 rounded-xl font-bold text-white bg-green-600 hover:bg-green-700 active:scale-95 transition-all" ${res && res.useful.length ? '' : 'disabled'}>Marcar útiles</button>
+                        </div>
+                    </div>
+                </div>`;
+
             } else {
                 modalContainer.innerHTML = '';
             }
